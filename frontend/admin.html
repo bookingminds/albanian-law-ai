@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="sq">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Menaxhimi i dokumenteve – Albanian Law AI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header class="navbar">
+        <a href="/" class="logo">
+            <span class="icon">&#9878;</span>
+            <span data-i18n="app.name">Albanian Law AI</span>
+        </a>
+        <nav>
+            <a href="/" data-i18n="nav.chat">Bisedë</a>
+            <a href="/admin" class="active" data-i18n="nav.admin">Paneli i administrimit</a>
+        </nav>
+    </header>
+
+    <div class="container">
+        <h1 class="page-title" data-i18n="admin.title">Menaxhimi i dokumenteve</h1>
+        <p class="page-subtitle" data-i18n="admin.subtitle">Ngarko dokumente juridike shqiptare (PDF, DOCX, TXT) dhe shiko statusin e përpunimit.</p>
+
+        <div class="card">
+            <div class="card-header" data-i18n="admin.upload_title">Ngarko dokument të ri</div>
+
+            <form id="uploadForm">
+                <div class="upload-zone" id="dropZone">
+                    <div class="upload-icon">&#128196;</div>
+                    <p><strong data-i18n="admin.drop_zone">Kliko ose tërhiq një skedar këtu</strong></p>
+                    <p class="file-types" data-i18n="admin.formats">Formatet e mbështetura: PDF, DOCX, DOC, TXT</p>
+                    <input type="file" id="fileInput" accept=".pdf,.docx,.doc,.txt" hidden>
+                </div>
+                <div id="selectedFile" style="display:none; margin-bottom:1rem;">
+                    <span style="font-weight:600; color:var(--primary);" id="selectedFileName"></span>
+                    <button type="button" onclick="clearFile()" class="btn btn-sm btn-danger" style="margin-left:.5rem;" data-i18n="admin.remove">Hiq</button>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n="admin.doc_title">Titulli i dokumentit (opsional)</label>
+                        <input type="text" id="docTitle" placeholder="e.g. Kodi Civil i Republikës së Shqipërisë">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="admin.law_number">Nr. i ligjit (opsional)</label>
+                        <input type="text" id="lawNumber" placeholder="e.g. 7850/1994">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="admin.date">Data (opsional)</label>
+                        <input type="text" id="lawDate" placeholder="e.g. 29.7.1994">
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary" id="uploadBtn" disabled data-i18n="admin.upload_btn">Ngarko dhe përpunoj</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+                <span data-i18n="admin.documents_list">Dokumentet e ngarkuara</span>
+                <button class="btn btn-sm btn-primary" onclick="loadDocuments()" data-i18n="admin.refresh">Rifresko</button>
+            </div>
+
+            <div id="documentsContainer">
+                <div class="empty-state">
+                    <div class="empty-icon">&#128218;</div>
+                    <p data-i18n="admin.empty">Ende nuk ka dokumente të ngarkuara.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/static/js/i18n.js"></script>
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/admin.js"></script>
+    <script>
+        (async function checkAdminAuth() {
+            const token = getToken();
+            if (!token) {
+                window.location.href = '/login?redirect=/admin';
+                return;
+            }
+            try {
+                const res = await fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } });
+                if (res.status === 401) {
+                    redirectToLogin();
+                    return;
+                }
+                const data = await res.json();
+                if (!data.user || !data.user.is_admin) {
+                    var msg = typeof __t !== 'undefined' ? __t('admin.admin_required') : 'Admin access required.';
+                    var back = typeof __t !== 'undefined' ? __t('admin.back_chat') : 'Back to Chat';
+                    document.body.innerHTML = '<div class="container"><div class="card"><p>' + msg + '</p><a href="/" class="btn btn-primary">' + back + '</a></div></div>';
+                    if (typeof __applyI18n === 'function') __applyI18n();
+                    return;
+                }
+            } catch (e) {
+                redirectToLogin();
+            }
+        })();
+    </script>
+</body>
+</html>

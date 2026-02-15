@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+.env
+albanian_law.db
+uploads/*
+!uploads/.gitkeep
+data/*
+!data/.gitkeep
+node_modules/
+.git/
+*.md
+test_*.py
+test_*.txt
+assets/

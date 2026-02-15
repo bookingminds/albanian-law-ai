@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: albanian-law-ai
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        fromService:
+          type: web
+          name: albanian-law-ai
+          property: host
+      - key: TRIAL_DAYS
+        value: 3
+      - key: BLOCK_DISPOSABLE_EMAILS
+        value: true
+    disk:
+      name: app-data
+      mountPath: /app/data
+      sizeGB: 1

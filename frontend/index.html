@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="sq">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Albanian Law AI – Asistent juridik</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="app-layout">
+        <!-- Mobile menu button -->
+        <button type="button" class="mobile-menu-btn" onclick="toggleSidebar()" aria-label="Menu">&#9776;</button>
+        <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <a href="/" class="sidebar-logo">
+                <span class="icon">&#9878;</span>
+                <span data-i18n="app.name">Albanian Law AI</span>
+            </a>
+            <button type="button" class="sidebar-new-chat" id="sidebarNewChat" onclick="newSession()">
+                <span>+</span>
+                <span data-i18n="chat.new_chat">Bisedë e re</span>
+            </button>
+            <div class="sidebar-chats" id="sidebarChats"></div>
+            <div class="sidebar-footer" id="sidebarFooter">
+                <!-- Guest: Hyr / Regjistrohu. User: email, Aktivizo, Dil -->
+                <a href="/login" class="btn btn-primary btn-outline-light" id="sidebarLogin" style="display:none;" data-i18n="auth.sign_in">Hyr</a>
+                <a href="/login" class="btn btn-primary" id="sidebarSignup" style="display:none;">Regjistrohu</a>
+                <div id="sidebarUser" style="display:none;">
+                    <span class="user-email" id="sidebarUserEmail"></span>
+                    <button type="button" class="btn btn-sm btn-primary" id="sidebarUpgrade" style="display:none;" data-i18n="sub.activate">Aktivizo abonimin</button>
+                    <button type="button" class="btn btn-sm btn-outline-light" onclick="logout()" data-i18n="nav.logout">Dil</button>
+                </div>
+            </div>
+            <a href="/admin" class="link-admin" id="linkAdmin" style="display:none;">Paneli i administrimit</a>
+        </aside>
+
+        <!-- Main: chat + input -->
+        <main class="main-area">
+            <div id="trialBanner" class="trial-banner" style="display:none;"></div>
+            <div id="paywallOverlay" class="paywall-overlay" style="display:none;">
+                <div class="card">
+                    <h2 id="paywallOverlayTitle">Prova falas ka përfunduar</h2>
+                    <p id="paywallOverlayMessage">Aktivizo abonimin për të vazhduar.</p>
+                    <p class="price" data-i18n="sub.price_month">€9.99 / muaj</p>
+                    <div class="paywall-buttons">
+                        <button type="button" class="btn btn-primary" id="paywallOverlayStripe">Aktivizo abonimin</button>
+                        <button type="button" class="btn btn-paypal" id="paywallOverlayPayPal">Paguaj me PayPal</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-content">
+                <div class="chat-messages" id="chatMessages">
+                    <div class="message message-assistant">
+                        <div class="message-bubble">
+                            <p><strong data-i18n="chat.welcome_title">Mirë se vini në Albanian Law AI!</strong></p>
+                            <p data-i18n="chat.welcome_body">Mund t'i përgjigjem pyetjeve bazuar në dokumentet juridike të ngarkuara. Më pyet çdo gjë për ligjet, rregulloret ose procedurat juridike shqiptare.</p>
+                            <p style="color:var(--text-muted); font-size:.85rem; margin-top:.5rem;" data-i18n="chat.welcome_note">Përgjigjem vetëm në bazë të dokumenteve të ngarkuara. Nëse nuk kam informacion të mjaftueshëm, do ta them.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="chat-input-area">
+                    <div class="chat-input-wrapper">
+                        <textarea id="chatInput" rows="1" onkeydown="handleKeyDown(event)" oninput="autoResize(this)" placeholder="Shkruaj pyetjen tënde për ligjet shqiptare…" title=""></textarea>
+                        <button class="btn btn-primary btn-send" onclick="sendMessage()" id="sendBtn" title="Dërgo">&#10148;</button>
+                    </div>
+                    <p class="chat-disclaimer" data-i18n="chat.disclaimer">Përgjigjet bazohen vetëm në dokumentet e ngarkuara. Kontrollo gjithmonë me burime zyrtare.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Auth modal (guest tries to send without login) -->
+    <div id="authModal" class="auth-modal-backdrop" style="display:none;">
+        <div class="auth-card card">
+            <div class="auth-tabs">
+                <button type="button" class="auth-tab" data-tab="login" data-i18n="auth.sign_in">Hyr</button>
+                <button type="button" class="auth-tab active" data-tab="register">Regjistrohu</button>
+            </div>
+            <p class="auth-subtitle" id="authModalSubtitle" style="margin-bottom:1rem;" data-i18n="auth.signup_to_start">Regjistrohu falas për 3 ditë provë dhe fillo të bisedosh.</p>
+            <div id="authModalLogin" class="auth-form" style="display:none;">
+                <form onsubmit="return handleModalLogin(event)">
+                    <div class="form-group">
+                        <label data-i18n="auth.email">Email</label>
+                        <input type="email" id="modalLoginEmail" required placeholder="ju@shembull.com">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="auth.password">Fjalëkalimi</label>
+                        <input type="password" id="modalLoginPassword" required placeholder="••••••••">
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block" data-i18n="auth.sign_in">Hyr</button>
+                </form>
+            </div>
+            <div id="authModalRegister" class="auth-form">
+                <form onsubmit="return handleModalRegister(event)">
+                    <div class="form-group">
+                        <label data-i18n="auth.email">Email</label>
+                        <input type="email" id="modalRegisterEmail" required placeholder="ju@shembull.com">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="auth.password_hint">Fjalëkalimi (të paktën 8 karaktere)</label>
+                        <input type="password" id="modalRegisterPassword" required minlength="8" placeholder="••••••••">
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block" data-i18n="auth.create_account_btn">Krijo llogari</button>
+                </form>
+            </div>
+            <button type="button" class="btn btn-sm" style="margin-top:1rem; background:transparent; color:var(--text-muted);" onclick="closeAuthModal()">Mbyll</button>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/static/js/i18n.js"></script>
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/chat.js"></script>
+    <script>
+        function t(key, opts) { return typeof __t !== 'undefined' ? __t(key, opts) : key; }
+
+        function closeAuthModal() {
+            document.getElementById('authModal').style.display = 'none';
+        }
+
+        function openAuthModal() {
+            document.getElementById('authModal').style.display = 'flex';
+        }
+
+        function showPaywallOverlay() {
+            var el = document.getElementById('paywallOverlay');
+            if (el) { el.style.display = 'flex'; el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+        }
+
+        document.querySelectorAll('#authModal .auth-tab').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var tab = btn.getAttribute('data-tab');
+                document.querySelectorAll('#authModal .auth-tab').forEach(function(b) { b.classList.remove('active'); });
+                btn.classList.add('active');
+                document.getElementById('authModalLogin').style.display = tab === 'login' ? 'block' : 'none';
+                document.getElementById('authModalRegister').style.display = tab === 'register' ? 'block' : 'none';
+                document.getElementById('authModalSubtitle').textContent = tab === 'login' ? t('auth.login_to_start') : t('auth.signup_to_start');
+            });
+        });
+
+        document.getElementById('authModal').addEventListener('click', function(e) {
+            if (e.target === this) closeAuthModal();
+        });
+
+        async function handleModalLogin(e) {
+            e.preventDefault();
+            var email = document.getElementById('modalLoginEmail').value.trim();
+            var password = document.getElementById('modalLoginPassword').value;
+            try {
+                var res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email, password: password }) });
+                var data = await res.json();
+                if (!res.ok) throw new Error(data.detail || t('error.login_failed'));
+                if (typeof setToken === 'function') setToken(data.token);
+                closeAuthModal();
+                window.location.reload();
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+            return false;
+        }
+
+        async function handleModalRegister(e) {
+            e.preventDefault();
+            var email = document.getElementById('modalRegisterEmail').value.trim();
+            var password = document.getElementById('modalRegisterPassword').value;
+            try {
+                var res = await fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email, password: password }) });
+                var data = await res.json();
+                if (!res.ok) throw new Error(data.detail || t('error.register_failed'));
+                if (typeof setToken === 'function') setToken(data.token);
+                closeAuthModal();
+                window.location.reload();
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+            return false;
+        }
+
+        (async function initApp() {
+            var token = typeof getToken === 'function' ? getToken() : null;
+
+            if (!token) {
+                document.getElementById('sidebarLogin').style.display = 'block';
+                document.getElementById('sidebarSignup').style.display = 'block';
+                document.getElementById('sidebarUser').style.display = 'none';
+                document.getElementById('trialBanner').style.display = 'none';
+                document.getElementById('paywallOverlay').style.display = 'none';
+                window._canSend = false;
+                return;
+            }
+
+            try {
+                var res = await fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } });
+                if (res.status === 401) {
+                    if (typeof clearToken === 'function') clearToken();
+                    window.location.reload();
+                    return;
+                }
+                var data = await res.json();
+                document.getElementById('sidebarLogin').style.display = 'none';
+                document.getElementById('sidebarSignup').style.display = 'none';
+                document.getElementById('sidebarUser').style.display = 'block';
+                document.getElementById('sidebarUserEmail').textContent = data.user.email;
+                if (data.user.is_admin) document.getElementById('linkAdmin').style.display = 'block';
+
+                var hasSubscription = data.subscription && data.subscription.status;
+                var inTrial = data.trial && data.trial.in_trial;
+                var trialDays = data.trial && data.trial.trial_days_left;
+                var trialHours = data.trial && data.trial.trial_hours_left;
+
+                if (hasSubscription) {
+                    document.getElementById('sidebarUpgrade').style.display = 'none';
+                    document.getElementById('trialBanner').style.display = 'none';
+                    document.getElementById('paywallOverlay').style.display = 'none';
+                    window._canSend = true;
+                } else if (inTrial) {
+                    document.getElementById('sidebarUpgrade').style.display = 'inline-flex';
+                    document.getElementById('paywallOverlay').style.display = 'none';
+                    window._canSend = true;
+                    var banner = document.getElementById('trialBanner');
+                    banner.style.display = 'block';
+                    if (trialHours !== null && trialHours < 24) {
+                        banner.textContent = t('trial.warning_24h');
+                        banner.className = 'trial-banner trial-banner-warning';
+                    } else {
+                        var msg = trialDays === 0 ? t('trial.last_day') : (trialDays === 1 ? t('trial.days_left_one') : (trialDays != null ? t('trial.days_left', { n: trialDays }) : t('trial.on_trial')));
+                        banner.textContent = msg;
+                        banner.className = 'trial-banner';
+                    }
+                } else {
+                    document.getElementById('sidebarUpgrade').style.display = 'inline-flex';
+                    document.getElementById('trialBanner').style.display = 'none';
+                    document.getElementById('paywallOverlay').style.display = 'flex';
+                    window._canSend = false;
+                    document.getElementById('paywallOverlayTitle').textContent = t('paywall.trial_ended_short');
+                    document.getElementById('paywallOverlayMessage').textContent = t('paywall.activate_to_continue');
+                    document.getElementById('paywallOverlayStripe').textContent = t('sub.activate');
+                    document.getElementById('paywallOverlayStripe').onclick = async function() {
+                        try {
+                            var r = await fetch('/api/subscription/checkout', { method: 'POST', headers: authHeaders() });
+                            var d = await r.json();
+                            if (d.checkout_url) window.location.href = d.checkout_url;
+                            else showToast(d.detail || t('error.generic'), 'error');
+                        } catch (e) { showToast(e.message || t('error.generic'), 'error'); }
+                    };
+                    document.getElementById('paywallOverlayPayPal').onclick = async function() {
+                        try {
+                            var r = await fetch('/api/subscription/checkout-paypal', { method: 'POST', headers: authHeaders() });
+                            var d = await r.json();
+                            if (d.approval_url) window.location.href = d.approval_url;
+                            else showToast(d.detail || t('error.generic'), 'error');
+                        } catch (e) { showToast(e.message || t('error.generic'), 'error'); }
+                    };
+                }
+            } catch (e) {
+                if (typeof clearToken === 'function') clearToken();
+                window.location.reload();
+            }
+        })();
+
+        function logout() {
+            if (typeof clearToken === 'function') clearToken();
+            window.location.href = '/';
+        }
+
+        var urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('subscription') === 'success') {
+            window.history.replaceState({}, '', '/');
+            setTimeout(function() { window.location.reload(); }, 100);
+        }
+
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('open');
+            document.getElementById('sidebarOverlay').classList.toggle('active');
+        }
+        function closeSidebar() {
+            document.getElementById('sidebar').classList.remove('open');
+            document.getElementById('sidebarOverlay').classList.remove('active');
+        }
+    </script>
+</body>
+</html>

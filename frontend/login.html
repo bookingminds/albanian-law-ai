@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="sq">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hyrje – Albanian Law AI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header class="navbar">
+        <a href="/" class="logo">
+            <span class="icon">&#9878;</span>
+            <span data-i18n="app.name">Albanian Law AI</span>
+        </a>
+        <nav>
+            <a href="/login" class="active" data-i18n="nav.login">Hyrje</a>
+            <a href="/" data-i18n="nav.chat">Bisedë</a>
+            <a href="/admin" data-i18n="nav.admin">Paneli i administrimit</a>
+        </nav>
+    </header>
+
+    <div class="auth-page">
+        <div class="auth-card card">
+            <div class="auth-tabs">
+                <button type="button" class="auth-tab active" data-tab="login" data-i18n="auth.sign_in">Hyr</button>
+                <button type="button" class="auth-tab" data-tab="register" data-i18n="auth.create_account_btn">Krijo llogari</button>
+            </div>
+
+            <div id="loginForm" class="auth-form">
+                <h2 data-i18n="auth.welcome_back">Mirë se u ktheve</h2>
+                <p class="auth-subtitle" data-i18n="auth.signin_subtitle">Hyr për të përdorur Albanian Law AI</p>
+                <form onsubmit="return handleLogin(event)">
+                    <div class="form-group">
+                        <label data-i18n="auth.email">Email</label>
+                        <input type="email" id="loginEmail" required data-i18n-placeholder="auth.placeholder_email" placeholder="ju@shembull.com">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="auth.password">Fjalëkalimi</label>
+                        <input type="password" id="loginPassword" required data-i18n-placeholder="auth.placeholder_pass" placeholder="••••••••">
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block" data-i18n="auth.sign_in">Hyr</button>
+                </form>
+            </div>
+
+            <div id="registerForm" class="auth-form" style="display:none;">
+                <h2 data-i18n="auth.create_account">Krijo llogari</h2>
+                <p class="auth-subtitle" data-i18n="auth.register_subtitle">Regjistrohu për një provë falas 3-ditore, pastaj €9.99/muaj.</p>
+                <form onsubmit="return handleRegister(event)">
+                    <div class="form-group">
+                        <label data-i18n="auth.email">Email</label>
+                        <input type="email" id="registerEmail" required data-i18n-placeholder="auth.placeholder_email" placeholder="ju@shembull.com">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="auth.password_hint">Fjalëkalimi (të paktën 8 karaktere)</label>
+                        <input type="password" id="registerPassword" required minlength="8" data-i18n-placeholder="auth.placeholder_pass" placeholder="••••••••">
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block" data-i18n="auth.create_account_btn">Krijo llogari</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/static/js/i18n.js"></script>
+    <script src="/static/js/auth.js"></script>
+    <script>
+        document.querySelectorAll('.auth-tab').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tab = btn.dataset.tab;
+                document.querySelectorAll('.auth-tab').forEach(b => b.classList.remove('active'));
+                document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+                document.getElementById('loginForm').style.display = tab === 'login' ? 'block' : 'none';
+                document.getElementById('registerForm').style.display = tab === 'register' ? 'block' : 'none';
+            });
+        });
+
+        async function handleLogin(e) {
+            e.preventDefault();
+            const email = document.getElementById('loginEmail').value.trim();
+            const password = document.getElementById('loginPassword').value;
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || (typeof __t !== 'undefined' ? __t('error.login_failed') : 'Login failed'));
+                setToken(data.token);
+                window.location.href = '/';
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+            return false;
+        }
+
+        async function handleRegister(e) {
+            e.preventDefault();
+            const email = document.getElementById('registerEmail').value.trim();
+            const password = document.getElementById('registerPassword').value;
+            try {
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || (typeof __t !== 'undefined' ? __t('error.register_failed') : 'Registration failed'));
+                setToken(data.token);
+                window.location.href = '/';
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+            return false;
+        }
+
+        function showToast(message, type) {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+    </script>
+</body>
+</html>
