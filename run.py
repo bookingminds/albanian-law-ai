@@ -3,11 +3,13 @@
 import os
 import uvicorn
 
+port = int(os.environ.get("PORT", 8000))
+is_dev = os.environ.get("ENV", "production") == "development"
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
         "backend.main:app",
         host="0.0.0.0",
         port=port,
-        reload=os.environ.get("ENV", "development") == "development",
+        reload=is_dev,
     )
