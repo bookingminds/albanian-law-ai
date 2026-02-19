@@ -1,0 +1,10 @@
+{
+  "android": {
+    "package": "com.zagrid.ailigje"
+  },
+  "extra": {
+    "eas": {
+      "projectId": "43bb51e4-8c2c-4e81-b55f-77b27d330898"
+    }
+  }
+}
