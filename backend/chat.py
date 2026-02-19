@@ -14,12 +14,20 @@ Pipeline (speed is NOT a priority, quality IS):
 import json
 import logging
 import time
-from openai import OpenAI
 from backend.config import settings
 
 logger = logging.getLogger("rag.chat")
 
-openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+openai_client = None
+
+
+def _ensure_openai():
+    global openai_client
+    if openai_client is not None:
+        return
+    from openai import OpenAI
+    openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+    logger.info("OpenAI client initialized (chat)")
 
 NO_CONTEXT_RESPONSE = (
     "Nuk mund ta konfirmoj këtë nga dokumentet e disponueshme."
@@ -105,6 +113,7 @@ async def generate_answer(question: str, user_id: int,
                           chat_history: list = None,
                           debug_mode: bool = False,
                           is_admin: bool = False) -> dict:
+    _ensure_openai()
     """Accuracy-first RAG pipeline. Quality > speed.
 
     Steps:
@@ -304,6 +313,7 @@ async def generate_answer_stream(question: str, user_id: int,
     Yields JSON-encoded SSE lines with progress updates, answer tokens,
     and final sources/metrics.
     """
+    _ensure_openai()
     from backend.query_expander import expand_query
     from backend.hybrid_search import multi_query_hybrid_search
     from backend.context_stitcher import stitch_neighbors

@@ -14,23 +14,38 @@ import hashlib
 import logging
 import time
 from collections import OrderedDict
-import chromadb
-from openai import OpenAI
 from backend.config import settings
 
 logger = logging.getLogger("rag.vector_store")
 
-# Initialize ChromaDB (persistent, local)
-chroma_client = chromadb.PersistentClient(
-    path=str(settings.DATA_DIR / "chroma_db"),
-)
+chroma_client = None
+collection = None
+openai_client = None
 
-collection = chroma_client.get_or_create_collection(
-    name="albanian_laws",
-    metadata={"hnsw:space": "cosine"},
-)
 
-openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+def _ensure_initialized():
+    """Lazy-init ChromaDB and OpenAI so the app can start even if they fail."""
+    global chroma_client, collection, openai_client
+    if collection is not None and openai_client is not None:
+        return
+    try:
+        import chromadb
+        chroma_client = chromadb.PersistentClient(
+            path=str(settings.DATA_DIR / "chroma_db"),
+        )
+        collection = chroma_client.get_or_create_collection(
+            name="albanian_laws",
+            metadata={"hnsw:space": "cosine"},
+        )
+        logger.info("ChromaDB initialized successfully")
+    except Exception as e:
+        logger.error(f"ChromaDB init failed: {e}")
+    try:
+        from openai import OpenAI
+        openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        logger.info("OpenAI client initialized")
+    except Exception as e:
+        logger.error(f"OpenAI client init failed: {e}")
 
 
 # ── Embedding Cache ───────────────────────────────────────────
@@ -71,6 +86,7 @@ _embedding_cache = EmbeddingCache(max_size=settings.EMBEDDING_CACHE_SIZE)
 
 def get_embedding(text: str) -> list[float]:
     """Generate embedding for a single text with cache."""
+    _ensure_initialized()
     text = text.strip()
     if not text:
         raise ValueError("Cannot generate embedding for empty text")
@@ -94,6 +110,7 @@ def get_embedding(text: str) -> list[float]:
 
 def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
     """Generate embeddings for a batch of texts with null-guard."""
+    _ensure_initialized()
     all_embeddings = []
     batch_size = 50
     total = len(texts)
@@ -133,6 +150,7 @@ async def add_chunks_to_store(doc_id: int, user_id: int,
 
     Every chunk is tagged with user_id and doc_id for scoped retrieval.
     """
+    _ensure_initialized()
     texts = [c["text"] for c in chunks]
     logger.info(f"[doc:{doc_id}] Generating embeddings for {len(texts)} chunks...")
 
@@ -228,10 +246,11 @@ async def search_documents(query: str, user_id: int = None,
 
     Returns chunks sorted by relevance (lowest distance first).
     """
+    _ensure_initialized()
     top_k = top_k or settings.TOP_K_RESULTS
     threshold = threshold or settings.SIMILARITY_THRESHOLD
 
-    if collection.count() == 0:
+    if not collection or collection.count() == 0:
         logger.warning("Search called but collection is empty")
         return []
 
@@ -387,6 +406,7 @@ async def search_documents_debug(query: str, user_id: int,
 
 async def delete_document_chunks(doc_id: int):
     """Remove all chunks for a given document from the vector store."""
+    _ensure_initialized()
     try:
         results = collection.get(
             where={"doc_id": str(doc_id)},
@@ -403,6 +423,7 @@ async def delete_document_chunks(doc_id: int):
 
 async def delete_user_chunks(user_id: int):
     """Remove ALL chunks for a user (account deletion)."""
+    _ensure_initialized()
     try:
         results = collection.get(
             where={"user_id": str(user_id)},
@@ -419,6 +440,10 @@ async def delete_user_chunks(user_id: int):
 
 def get_store_stats() -> dict:
     """Return vector store statistics for monitoring."""
+    _ensure_initialized()
+    if not collection:
+        return {"total_chunks": 0, "collection_name": "albanian_laws",
+                "similarity_metric": "cosine", "embedding_model": settings.EMBEDDING_MODEL}
     count = collection.count()
     return {
         "total_chunks": count,
@@ -430,7 +455,10 @@ def get_store_stats() -> dict:
 
 def get_user_chunk_count(user_id: int) -> int:
     """Count chunks belonging to a specific user."""
+    _ensure_initialized()
     try:
+        if not collection:
+            return 0
         results = collection.get(
             where={"user_id": str(user_id)},
         )
@@ -447,7 +475,10 @@ async def migrate_chunks_add_user_id(doc_id_to_user_id: dict):
     Args:
         doc_id_to_user_id: mapping {doc_id (str): user_id (str)}
     """
+    _ensure_initialized()
     try:
+        if not collection:
+            return 0
         all_data = collection.get(include=["metadatas"])
         if not all_data or not all_data["ids"]:
             logger.info("Migration: no chunks to migrate")

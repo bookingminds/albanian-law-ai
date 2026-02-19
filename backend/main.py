@@ -59,10 +59,20 @@ from backend.trial_abuse import is_disposable_email, get_client_ip
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database and run migrations on startup."""
-    await init_db()
-    await _run_chroma_migration()
-    # Build in-memory topic index for instant suggestions (runs in background)
-    asyncio.get_event_loop().run_in_executor(None, _build_topic_index)
+    try:
+        await init_db()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Database init failed: {e}")
+    try:
+        await _run_chroma_migration()
+    except Exception as e:
+        logger.warning(f"ChromaDB migration skipped: {e}")
+    try:
+        asyncio.get_event_loop().run_in_executor(None, _build_topic_index)
+    except Exception as e:
+        logger.warning(f"Topic index build skipped: {e}")
+    logger.info("Application startup complete")
     yield
 
 
@@ -980,8 +990,12 @@ _EXTENDED_STOP = frozenset(
 def _build_topic_index():
     """Extract meaningful legal keywords from ALL chunks in ChromaDB."""
     global _topic_index, _topic_index_ready
-    from backend.vector_store import collection as _col
+    from backend.vector_store import collection as _col, _ensure_initialized
+    _ensure_initialized()
     try:
+        if not _col:
+            _topic_index_ready = True
+            return
         total = _col.count()
         if total == 0:
             _topic_index_ready = True
@@ -1254,6 +1268,11 @@ async def suggest_questions(
 @app.get("/health")
 @app.get("/api/health")
 async def health_check():
+    return {"status": "ok"}
+
+
+@app.get("/api/health/detailed")
+async def health_check_detailed():
     from backend.vector_store import get_store_stats
     docs = await get_all_documents()
     ready = [d for d in docs if d.get("status") == "ready"]

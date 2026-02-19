@@ -20,7 +20,6 @@ Variant types:
 import json
 import logging
 import re
-from openai import OpenAI
 from backend.config import settings
 from backend.text_normalizer import (
     normalize_query, normalize_legal_query,
@@ -28,8 +27,15 @@ from backend.text_normalizer import (
 )
 
 logger = logging.getLogger("rag.expander")
+_client = None
 
-_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+def _ensure_client():
+    global _client
+    if _client is not None:
+        return
+    from openai import OpenAI
+    _client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -597,6 +603,7 @@ async def expand_query(question: str) -> list[str]:
     # ── 3. LLM variants ──────────────────────────────────
 
     try:
+        _ensure_client()
         response = _client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
