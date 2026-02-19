@@ -21,9 +21,9 @@
             "trial.on_trial": "Jeni në provën falas.",
             "sub.badge": "Abonuar",
             "sub.activate": "Aktivizo abonimin",
-            "sub.price_month": "€9.99 / muaj",
-            "sub.stripe": "Aktivizo me Stripe",
-            "sub.paypal": "Paguaj me PayPal",
+            "sub.price_month": "4.99€ / muaj",
+            "sub.start_trial": "Fillo provën falas (1 ditë)",
+            "sub.restore": "Rikthe blerjen",
             "sub.unlimited": "Përdorim i pakufizuar (zbatohet politika e përdorimit të drejtë)",
 
             // Paywall
@@ -53,7 +53,7 @@
             "auth.welcome_back": "Mirë se u ktheve",
             "auth.signin_subtitle": "Hyr për të përdorur Albanian Law AI",
             "auth.create_account": "Krijo llogari",
-            "auth.register_subtitle": "Regjistrohu për një provë falas 3-ditore, pastaj €9.99/muaj.",
+            "auth.register_subtitle": "Regjistrohu për një provë falas 1-ditore, pastaj 4.99€/muaj.",
             "auth.email": "Email",
             "auth.password": "Fjalëkalimi",
             "auth.password_hint": "Fjalëkalimi (të paktën 8 karaktere)",
@@ -61,7 +61,7 @@
             "auth.create_account_btn": "Krijo llogari",
             "auth.placeholder_email": "ju@shembull.com",
             "auth.placeholder_pass": "••••••••",
-            "auth.signup_to_start": "Regjistrohu falas për 3 ditë provë dhe fillo të bisedosh.",
+            "auth.signup_to_start": "Regjistrohu falas për 1 ditë provë dhe fillo të bisedosh.",
             "auth.login_to_start": "Hyni në llogari për të vazhduar.",
 
             // Admin

@@ -1,128 +1,164 @@
-# Deployment Guide – Albanian Law AI
+# Deploy Albanian Law AI
 
-## Option 1: Railway (Easiest – recommended)
+## Recommended: Render (simplest, free tier available)
 
-**Cost:** ~$5/month | **Time:** 5 minutes
+**Cost:** Free (750 hours/month) or $7/month for always-on | **Time:** 5 minutes
 
-1. Push your code to GitHub:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git remote add origin https://github.com/YOUR_USER/albanian-law-ai.git
-   git push -u origin main
-   ```
-
-2. Go to [railway.app](https://railway.app) and sign in with GitHub.
-
-3. Click **"New Project"** → **"Deploy from GitHub repo"** → select your repo.
-
-4. Railway auto-detects the `Dockerfile`. Set environment variables:
-   - Click the service → **Variables** → **Raw Editor**, paste your `.env.production` values.
-   - Set `FRONTEND_URL` to your Railway URL (e.g. `https://albanian-law-ai-production.up.railway.app`).
-
-5. Click **Deploy**. Your app will be live in ~2 minutes.
-
-6. **Custom domain** (optional): Settings → Networking → Custom Domain → add your domain.
-
----
-
-## Option 2: Render (Free tier available)
-
-**Cost:** Free (with limits) or $7/month | **Time:** 5 minutes
-
-1. Push code to GitHub (same as above).
-
-2. Go to [render.com](https://render.com) and sign in.
-
-3. Click **"New +"** → **"Web Service"** → connect your repo.
-
-4. Settings:
-   - **Build Command:** `pip install -r requirements.txt`
-   - **Start Command:** `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
-   - **Environment:** Add all variables from `.env.production`.
-
-5. Add a **Disk** (Settings → Disks): mount path `/app/data`, size 1 GB.
-
-6. Click **Deploy**.
-
----
-
-## Option 3: VPS (DigitalOcean / Hetzner)
-
-**Cost:** €4-6/month | **Time:** 15 minutes
-
-1. Create an Ubuntu 22.04 server (1 GB RAM minimum).
-
-2. SSH in and run:
-   ```bash
-   # Install Docker
-   curl -fsSL https://get.docker.com | sh
-
-   # Clone your repo
-   git clone https://github.com/YOUR_USER/albanian-law-ai.git
-   cd albanian-law-ai
-
-   # Create .env
-   cp .env.production .env
-   nano .env  # fill in your values
-
-   # Run with Docker Compose
-   docker compose up -d
-
-   # Check logs
-   docker compose logs -f
-   ```
-
-3. Set up a reverse proxy (Caddy is easiest):
-   ```bash
-   apt install -y caddy
-   ```
-   Edit `/etc/caddy/Caddyfile`:
-   ```
-   your-domain.com {
-       reverse_proxy localhost:8000
-   }
-   ```
-   ```bash
-   systemctl restart caddy
-   ```
-   Caddy auto-provisions HTTPS via Let's Encrypt.
-
----
-
-## Option 4: Docker (any server)
+### Step 1: Push to GitHub
 
 ```bash
-# Build
-docker build -t albanian-law-ai .
+git init
+git add .
+git commit -m "Initial commit"
+git remote add origin https://github.com/YOUR_USER/albanian-law-ai.git
+git push -u origin main
+```
 
-# Run
-docker run -d \
-  --name albanian-law-ai \
-  -p 8000:8000 \
-  --env-file .env \
-  -v albanian_law_data:/app/data \
-  -v albanian_law_uploads:/app/uploads \
-  --restart unless-stopped \
-  albanian-law-ai
+### Step 2: Create Render Web Service
+
+1. Go to [render.com](https://render.com) and sign in with GitHub.
+2. Click **"New +"** > **"Web Service"** > connect your GitHub repo.
+3. Fill in settings:
+
+| Setting | Value |
+|---------|-------|
+| **Name** | `albanian-law-ai` |
+| **Region** | Frankfurt (EU) or your preferred |
+| **Runtime** | Python |
+| **Build Command** | `pip install -r requirements.txt` |
+| **Start Command** | `uvicorn backend.main:app --host 0.0.0.0 --port $PORT` |
+| **Instance Type** | Free (or Starter $7/month for always-on) |
+| **Health Check Path** | `/health` |
+
+### Step 3: Add a Disk (persistent storage)
+
+Go to your service > **Disks** > **Add Disk**:
+
+| Setting | Value |
+|---------|-------|
+| **Name** | `app-data` |
+| **Mount Path** | `/opt/render/project/src/data` |
+| **Size** | 1 GB |
+
+Also add another disk for uploads:
+
+| Setting | Value |
+|---------|-------|
+| **Name** | `uploads` |
+| **Mount Path** | `/opt/render/project/src/uploads` |
+| **Size** | 1 GB |
+
+### Step 4: Set Environment Variables
+
+Go to your service > **Environment** > **Add Environment Variable**.
+
+Add these (REQUIRED):
+
+| Key | Value |
+|-----|-------|
+| `OPENAI_API_KEY` | `sk-proj-...` (your OpenAI key) |
+| `JWT_SECRET` | Generate: `python -c "import secrets; print(secrets.token_hex(64))"` |
+| `SUPABASE_URL` | `https://xxxxx.supabase.co` |
+| `SUPABASE_ANON_KEY` | `eyJhbG...` (from Supabase Dashboard) |
+| `SUPABASE_SERVICE_ROLE_KEY` | `eyJhbG...` (from Supabase Dashboard) |
+| `SERVER_URL` | `https://albanian-law-ai.onrender.com` (your Render URL) |
+| `FRONTEND_URL` | `https://albanian-law-ai.onrender.com` (same as above) |
+| `PYTHON_VERSION` | `3.12.8` |
+
+Optional (have safe defaults):
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `LLM_MODEL` | `gpt-4o-mini` | OpenAI model |
+| `TRIAL_DAYS` | `1` | Free trial length |
+| `SUBSCRIPTION_PRICE_EUR` | `4.99` | Subscription price |
+| `ADMIN_EMAIL` | (empty) | Force a specific email as admin |
+
+### Step 5: Deploy
+
+Click **"Create Web Service"**. Render will:
+1. Clone your repo
+2. Run `pip install -r requirements.txt`
+3. Run `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
+4. Give you a URL like `https://albanian-law-ai.onrender.com`
+
+### Step 6: Verify
+
+Open `https://albanian-law-ai.onrender.com/health` in your browser. You should see:
+```json
+{"status": "healthy", "documents_total": 0, "documents_ready": 0, ...}
 ```
 
 ---
 
-## After deployment checklist
+## Alternative: Railway
 
-- [ ] Set `FRONTEND_URL` to your actual domain (e.g. `https://ligje.al`)
-- [ ] Set a strong random `JWT_SECRET`
-- [ ] Add your `OPENAI_API_KEY`
-- [ ] Set up Stripe: create product → price → webhook → add keys to env
-- [ ] Register your admin account (first user = admin, or set `ADMIN_EMAIL`)
-- [ ] Upload legal documents via `/admin`
-- [ ] Test the chat
-- [ ] Set up Stripe webhook URL: `https://your-domain.com/api/webhooks/stripe`
+**Cost:** ~$5/month (usage-based) | **Time:** 5 minutes
 
-## Stripe webhook events to subscribe to
+### Step 1: Push to GitHub (same as above)
 
-- `checkout.session.completed`
-- `customer.subscription.updated`
-- `customer.subscription.deleted`
+### Step 2: Create Railway Project
+
+1. Go to [railway.app](https://railway.app) and sign in with GitHub.
+2. Click **"New Project"** > **"Deploy from GitHub repo"** > select your repo.
+3. Railway auto-detects the `Procfile` or `Dockerfile`.
+
+### Step 3: Configure
+
+Click on the deployed service, then:
+
+1. **Settings** > **Networking** > **Generate Domain** (gives you `xxx.up.railway.app`)
+2. **Variables** > **Raw Editor** > paste all env vars:
+
+```
+OPENAI_API_KEY=sk-proj-...
+JWT_SECRET=your-generated-64-char-hex
+SUPABASE_URL=https://xxxxx.supabase.co
+SUPABASE_ANON_KEY=eyJhbG...
+SUPABASE_SERVICE_ROLE_KEY=eyJhbG...
+SERVER_URL=https://xxx.up.railway.app
+FRONTEND_URL=https://xxx.up.railway.app
+```
+
+3. **Settings** > **Deploy** > **Custom Start Command**:
+```
+uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+```
+
+4. **Settings** > **Health Check Path**: `/health`
+
+### Step 4: Add Persistent Volume
+
+Railway > your service > **Volumes** > **Add Volume**:
+- Mount path: `/app/data`
+- Size: 1 GB
+
+### Step 5: Deploy
+
+Railway deploys automatically on push. Check the deployment logs for success.
+
+---
+
+## After Deployment Checklist
+
+- [ ] Backend is live and `/health` returns 200
+- [ ] Register your admin account at `/login` (first user = admin)
+- [ ] Upload legal documents at `/admin`
+- [ ] Test the chat at `/`
+- [ ] Update `SERVER_URL` in `mobile/App.js` to your production URL
+- [ ] Build release APK: `cd mobile && npx eas-cli build --platform android --profile preview`
+- [ ] Test the mobile app connects to the production backend
+- [ ] Create `law_ai_monthly` subscription in Google Play Console (4.99 EUR/month, 1-day free trial)
+
+---
+
+## Commands Reference
+
+| Action | Command |
+|--------|---------|
+| Install deps | `pip install -r requirements.txt` |
+| Run locally | `python run.py` |
+| Run production | `uvicorn backend.main:app --host 0.0.0.0 --port $PORT` |
+| Build Docker | `docker build -t albanian-law-ai .` |
+| Run Docker | `docker run -d -p 8000:8000 --env-file .env -v data:/app/data -v uploads:/app/uploads albanian-law-ai` |
+| Health check | `curl https://your-domain.com/health` |

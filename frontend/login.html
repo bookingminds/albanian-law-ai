@@ -42,11 +42,23 @@
                     </div>
                     <button type="submit" class="btn btn-primary btn-block" data-i18n="auth.sign_in">Hyr</button>
                 </form>
+                <p style="text-align:center;margin-top:12px;">
+                    <a href="#" id="forgotPasswordLink" style="color:var(--primary);font-size:0.85rem;">Keni harruar fjalëkalimin?</a>
+                </p>
+                <div id="forgotPasswordForm" style="display:none;margin-top:16px;">
+                    <form onsubmit="return handleForgotPassword(event)">
+                        <div class="form-group">
+                            <label>Email për rivendosje</label>
+                            <input type="email" id="forgotEmail" required placeholder="ju@shembull.com">
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-block">Dërgo linkun e rivendosjes</button>
+                    </form>
+                </div>
             </div>
 
             <div id="registerForm" class="auth-form" style="display:none;">
                 <h2 data-i18n="auth.create_account">Krijo llogari</h2>
-                <p class="auth-subtitle" data-i18n="auth.register_subtitle">Regjistrohu për një provë falas 3-ditore, pastaj €9.99/muaj.</p>
+                <p class="auth-subtitle" data-i18n="auth.register_subtitle">Regjistrohu për një provë falas 1-ditore, pastaj 4.99€/muaj.</p>
                 <form onsubmit="return handleRegister(event)">
                     <div class="form-group">
                         <label data-i18n="auth.email">Email</label>
@@ -111,6 +123,31 @@
                 if (!res.ok) throw new Error(data.detail || (typeof __t !== 'undefined' ? __t('error.register_failed') : 'Registration failed'));
                 setToken(data.token);
                 window.location.href = '/';
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+            return false;
+        }
+
+        document.getElementById('forgotPasswordLink').addEventListener('click', function(e) {
+            e.preventDefault();
+            var form = document.getElementById('forgotPasswordForm');
+            form.style.display = form.style.display === 'none' ? 'block' : 'none';
+        });
+
+        async function handleForgotPassword(e) {
+            e.preventDefault();
+            var email = document.getElementById('forgotEmail').value.trim();
+            try {
+                var res = await fetch('/api/auth/forgot-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: email }),
+                });
+                var data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Gabim');
+                showToast('Kontrollo emailin per linkun e rivendosjes.', 'success');
+                document.getElementById('forgotPasswordForm').style.display = 'none';
             } catch (err) {
                 showToast(err.message, 'error');
             }

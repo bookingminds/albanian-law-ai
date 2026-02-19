@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="sq">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dokumentet e mia – Albanian Law AI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .doc-lib { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+        .doc-lib-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; flex-wrap: wrap; gap: .75rem; }
+        .doc-lib-header h1 { font-size: 1.5rem; color: var(--primary); margin: 0; }
+        .doc-lib-actions { display: flex; gap: .5rem; }
+        .doc-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.25rem; margin-bottom: .75rem; display: flex; align-items: center; gap: 1rem; transition: box-shadow .2s; }
+        .doc-card:hover { box-shadow: var(--shadow-lg); }
+        .doc-icon { font-size: 1.8rem; flex-shrink: 0; }
+        .doc-info { flex: 1; min-width: 0; }
+        .doc-info .doc-title { font-weight: 600; font-size: .95rem; color: var(--text); margin-bottom: .25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .doc-info .doc-meta { font-size: .78rem; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: .5rem; }
+        .doc-info .doc-meta span { display: inline-flex; align-items: center; gap: .2rem; }
+        .doc-actions { display: flex; gap: .35rem; flex-shrink: 0; }
+        .doc-actions button { padding: .35rem .6rem; border-radius: 6px; font-size: .72rem; font-weight: 600; border: 1px solid var(--border); background: var(--bg); color: var(--text-secondary); cursor: pointer; transition: all .15s; }
+        .doc-actions button:hover { background: var(--primary-lighter); border-color: var(--primary-light); color: var(--primary); }
+        .doc-actions .btn-danger-mini { color: var(--error); border-color: var(--error); }
+        .doc-actions .btn-danger-mini:hover { background: #fff5f5; }
+        .doc-status-badge { padding: .2rem .5rem; border-radius: 10px; font-size: .68rem; font-weight: 700; text-transform: uppercase; }
+        .doc-status-badge.ready { background: #f0fff4; color: #276749; }
+        .doc-status-badge.processing { background: #fefcbf; color: #975a16; }
+        .doc-status-badge.failed { background: #fff5f5; color: #c53030; }
+        .doc-empty { text-align: center; padding: 3rem; color: var(--text-muted); }
+        .doc-empty .icon { font-size: 3rem; margin-bottom: .75rem; }
+        .back-link { display: inline-flex; align-items: center; gap: .4rem; color: var(--primary); text-decoration: none; font-size: .85rem; font-weight: 500; margin-bottom: 1rem; }
+        .back-link:hover { text-decoration: underline; }
+    </style>
+</head>
+<body style="background: var(--bg);">
+    <div class="doc-lib">
+        <a href="/" class="back-link">&#8592; Kthehu te biseda</a>
+
+        <div class="doc-lib-header">
+            <h1>&#128196; Dokumentet e mia</h1>
+            <div class="doc-lib-actions">
+                <button type="button" class="btn btn-primary" onclick="document.getElementById('docUpload').click()">
+                    &#128206; Ngarko dokument
+                </button>
+                <input type="file" id="docUpload" style="display:none;" accept=".pdf,.docx,.doc,.txt" onchange="uploadDoc(this)">
+            </div>
+        </div>
+
+        <div id="docList">
+            <div class="doc-empty">
+                <div class="icon">&#128196;</div>
+                <p>Duke ngarkuar...</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/static/js/auth.js"></script>
+    <script>
+        const API = '';
+
+        async function loadDocs() {
+            const token = getToken();
+            if (!token) { window.location.href = '/login'; return; }
+
+            // Check if user is admin — redirect non-admins
+            try {
+                const meRes = await fetch(API + '/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } });
+                if (meRes.ok) {
+                    const meData = await meRes.json();
+                    if (!meData.user || !meData.user.is_admin) {
+                        window.location.href = '/';
+                        return;
+                    }
+                }
+            } catch (_) { /* continue */ }
+            try {
+                const res = await fetch(API + '/api/user/documents', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (res.status === 401) { clearToken(); window.location.href = '/login'; return; }
+                const data = await res.json();
+                renderDocs(data.documents || []);
+            } catch (e) {
+                document.getElementById('docList').innerHTML = '<div class="doc-empty"><p>Gabim gjatë ngarkimit.</p></div>';
+            }
+        }
+
+        function renderDocs(docs) {
+            const el = document.getElementById('docList');
+            if (!docs.length) {
+                el.innerHTML = '<div class="doc-empty"><div class="icon">&#128196;</div><p>Nuk keni dokumente ende.<br>Klikoni "Ngarko dokument" për të filluar.</p></div>';
+                return;
+            }
+            el.innerHTML = docs.map(d => {
+                const title = d.title || d.original_filename || 'Dokument';
+                const status = d.status || 'processing';
+                const statusLabel = status === 'ready' ? 'Gati' : status === 'processing' ? 'Duke përpunuar...' : 'Dështoi';
+                const icon = d.file_type === 'pdf' ? '&#128196;' : d.file_type === 'docx' ? '&#128195;' : '&#128220;';
+                const date = d.uploaded_at ? new Date(d.uploaded_at).toLocaleDateString('sq-AL') : '';
+                const size = d.file_size ? formatSize(d.file_size) : '';
+                const pages = d.page_count ? d.page_count + ' faqe' : '';
+                const chunks = d.total_chunks ? d.total_chunks + ' chunks' : '';
+
+                let actions = '';
+                actions += '<button onclick="renameDok(' + d.id + ', \'' + escHtml(title) + '\')">&#9998; Ndrysho</button>';
+                if (status === 'ready') {
+                    actions += '<button onclick="viewPdf(' + d.id + ')">&#128065; Shiko</button>';
+                    actions += '<button onclick="reprocessDok(' + d.id + ')">&#128260; Ripërpuno</button>';
+                }
+                if (status === 'failed') {
+                    actions += '<button onclick="retryDok(' + d.id + ')">&#128260; Riprovo</button>';
+                }
+                actions += '<button class="btn-danger-mini" onclick="deleteDok(' + d.id + ')">&#128465; Fshi</button>';
+
+                return `<div class="doc-card">
+                    <div class="doc-icon">${icon}</div>
+                    <div class="doc-info">
+                        <div class="doc-title" title="${escHtml(title)}">${escHtml(title)}</div>
+                        <div class="doc-meta">
+                            <span class="doc-status-badge ${status}">${statusLabel}</span>
+                            ${date ? '<span>&#128197; ' + date + '</span>' : ''}
+                            ${size ? '<span>&#128190; ' + size + '</span>' : ''}
+                            ${pages ? '<span>&#128196; ' + pages + '</span>' : ''}
+                            ${chunks ? '<span>&#128268; ' + chunks + '</span>' : ''}
+                            ${d.error_message ? '<span style="color:var(--error);">&#9888; ' + escHtml(d.error_message).substring(0, 60) + '</span>' : ''}
+                        </div>
+                    </div>
+                    <div class="doc-actions">${actions}</div>
+                </div>`;
+            }).join('');
+        }
+
+        async function uploadDoc(input) {
+            if (!input.files || !input.files[0]) return;
+            const file = input.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                showToast('Duke ngarkuar...', 'info');
+                const res = await fetch(API + '/api/user/documents/upload', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + getToken() },
+                    body: formData,
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Dështoi');
+                showToast('U ngarkua me sukses!', 'success');
+                loadDocs();
+                // Poll until processing finishes
+                setTimeout(loadDocs, 3000);
+                setTimeout(loadDocs, 8000);
+                setTimeout(loadDocs, 15000);
+            } catch (e) { showToast(e.message, 'error'); }
+            input.value = '';
+        }
+
+        async function renameDok(id, currentTitle) {
+            const newTitle = prompt('Titulli i ri:', currentTitle);
+            if (!newTitle || newTitle.trim() === currentTitle) return;
+            try {
+                const res = await fetch(API + '/api/user/documents/' + id + '/rename', {
+                    method: 'PATCH',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ title: newTitle.trim() }),
+                });
+                if (!res.ok) { const d = await res.json(); throw new Error(d.detail); }
+                showToast('Titulli u ndryshua', 'success');
+                loadDocs();
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        function viewPdf(id) {
+            window.open(API + '/api/user/documents/' + id + '/pdf?token=' + getToken(), '_blank');
+        }
+
+        async function retryDok(id) {
+            try {
+                const res = await fetch(API + '/api/user/documents/' + id + '/retry', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + getToken() },
+                });
+                if (!res.ok) { const d = await res.json(); throw new Error(d.detail); }
+                showToast('Ripërpunimi ka filluar', 'info');
+                loadDocs();
+                setTimeout(loadDocs, 5000);
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        async function reprocessDok(id) {
+            if (!confirm('Dëshironi ta ripërpunoni dokumentin?')) return;
+            await retryDok(id);
+        }
+
+        async function deleteDok(id) {
+            if (!confirm('Jeni të sigurt? Dokumenti dhe chunks do të fshihen përgjithmonë.')) return;
+            try {
+                const res = await fetch(API + '/api/user/documents/' + id, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + getToken() },
+                });
+                if (!res.ok) { const d = await res.json(); throw new Error(d.detail); }
+                showToast('U fshi me sukses', 'success');
+                loadDocs();
+            } catch (e) { showToast(e.message, 'error'); }
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function escHtml(s) {
+            if (!s) return '';
+            const d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        function showToast(message, type) {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast toast-' + type;
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3500);
+        }
+
+        loadDocs();
+        // Auto-refresh every 10s if there are processing docs
+        setInterval(loadDocs, 10000);
+    </script>
+</body>
+</html>

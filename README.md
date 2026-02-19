@@ -4,31 +4,40 @@ A RAG-based (Retrieval-Augmented Generation) legal document Q&A system for Alban
 
 ## Features
 
-- **3-day free trial** — New users get full access for 3 days, then €9.99/month (Stripe or PayPal)
+- **1-day free trial** — New users get full access for 24 hours, then 4.99 EUR/month (Google Play Billing)
 - **Anti-abuse** — One trial per account; disposable-email blocklist; signup rate limit per IP
-- **Single subscription plan** — €9.99/month for all users (Stripe or PayPal)
-- **Auth** — Register and log in; first user is admin (or set `ADMIN_EMAIL`)
+- **Google Play subscription** — 4.99 EUR/month via Google Play Billing (subscription ID: `law_ai_monthly`)
+- **Supabase Auth** — Email/password authentication with auto-confirmation (local JWT fallback)
+- **Password reset** — Forgot-password flow via Supabase Auth
 - **Admin Panel** — Upload PDF/DOCX/TXT legal documents, track processing status (admin only)
-- **Chat Interface** — Ask legal questions in Albanian or English, get answers with citations (subscribers only)
-- **RAG Pipeline** — Upload → Parse → Chunk → Embed → Retrieve → Generate
+- **Chat Interface** — Ask legal questions in Albanian, get answers with citations (subscribers only)
+- **Advanced RAG Pipeline** — Multi-query expansion, hybrid search (vector + keyword), re-ranking, context stitching, coverage self-check
 - **Smart Chunking** — Splits by Albanian legal articles (Neni) when detected
-- **No Hallucination** — If insufficient context is found, the system says so
+- **No Hallucination** — Confidence gate + strict evidence-only answering
 - **Source Citations** — Every answer shows: document title, law number, date, article, page
+- **Mobile App** — Expo/React Native wrapper with native Google Play Billing
+- **Rate Limiting** — Login (5/min), registration (5/min), chat (30/min)
+- **CORS** — Configured for production origins
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌───────────────┐
-│  Frontend    │────▶│  FastAPI      │────▶│  OpenAI API   │
-│  (HTML/JS)  │◀────│  Backend      │◀────│  (GPT + Emb.) │
-└─────────────┘     └──────┬───────┘     └───────────────┘
-                           │
-                    ┌──────┴───────┐
-                    │              │
-              ┌─────▼─────┐ ┌─────▼─────┐
-              │  SQLite    │ │  ChromaDB  │
-              │  (metadata)│ │  (vectors) │
-              └───────────┘ └───────────┘
++---------------+     +----------------+     +-----------------+
+|  Frontend     |---->|  FastAPI       |---->|  OpenAI API     |
+|  (HTML/JS)    |<----|  Backend       |<----|  (GPT + Emb.)   |
++---------------+     +--------+-------+     +-----------------+
+                               |
++---------------+     +--------+-------+
+|  Mobile App   |     |                |
+|  (Expo/RN)    |     v                v
++---------------+  +--------+  +----------+
+|  WebView      |  | SQLite |  | ChromaDB |
++---------------+  +--------+  +----------+
+                               |
+                        +------+------+
+                        | Supabase    |
+                        | (Auth)      |
+                        +-------------+
 ```
 
 | Component         | Technology              | Purpose                     |
@@ -39,7 +48,10 @@ A RAG-based (Retrieval-Augmented Generation) legal document Q&A system for Alban
 | Document Parsing  | PyMuPDF, python-docx    | PDF/DOCX/TXT text extraction |
 | Embeddings        | OpenAI text-embedding-3-small | Document & query vectors |
 | LLM               | OpenAI GPT-4o-mini      | Answer generation           |
+| Auth              | Supabase Auth + JWT     | User authentication         |
+| Payments          | Google Play Billing     | Subscriptions (expo-iap)    |
 | Frontend          | Vanilla HTML/CSS/JS     | Admin panel + Chat UI       |
+| Mobile            | Expo + React Native     | Android app (WebView)       |
 
 ## Setup
 
@@ -47,6 +59,7 @@ A RAG-based (Retrieval-Augmented Generation) legal document Q&A system for Alban
 
 - Python 3.10+
 - An OpenAI API key (get one at https://platform.openai.com/api-keys)
+- A Supabase project (get one at https://supabase.com)
 
 ### Installation
 
@@ -58,10 +71,8 @@ A RAG-based (Retrieval-Augmented Generation) legal document Q&A system for Alban
 2. **Create a virtual environment:**
    ```bash
    python -m venv venv
-
    # Windows
    venv\Scripts\activate
-
    # macOS/Linux
    source venv/bin/activate
    ```
@@ -77,8 +88,8 @@ A RAG-based (Retrieval-Augmented Generation) legal document Q&A system for Alban
    ```
    Edit `.env` and set at least:
    - `OPENAI_API_KEY` — your OpenAI API key
-   - `JWT_SECRET` — a long random string (e.g. `openssl rand -hex 32`)
-   - For subscriptions: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` (see [Stripe setup](#stripe-subscription-setup) below)
+   - `JWT_SECRET` — generate with `python -c "import secrets; print(secrets.token_hex(64))"`
+   - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` — from Supabase Dashboard > Settings > API
 
 5. **Run the application:**
    ```bash
@@ -90,69 +101,32 @@ A RAG-based (Retrieval-Augmented Generation) legal document Q&A system for Alban
    - Login / Register: http://localhost:8000/login
    - Admin Panel: http://localhost:8000/admin
 
-## Usage
+## Google Play Billing Setup
 
-### 1. Register and subscribe
-
-1. Go to http://localhost:8000/login and **Register** with email and password (min 8 characters).
-2. The first user registered is an **admin** (or set `ADMIN_EMAIL` in `.env` to assign admin to that email).
-3. New accounts get a **3-day free trial** — you can use the chat immediately. When the trial ends (or if you already used a trial), subscribe via **Stripe** or **PayPal** (€9.99/month).
-4. Complete payment when ready; you’ll be redirected back and the chat stays unlocked.
-
-### 2. Upload documents (Admin only)
-
-1. Go to http://localhost:8000/admin (must be logged in as admin).
-2. Drag & drop or click to select a PDF, DOCX, or TXT file.
-3. Optionally set Title, Law Number, and Date.
-4. Click **Upload & Process** and wait until status is **processed**.
-
-### 3. Ask questions (Subscribers)
-
-1. Go to http://localhost:8000 (logged in with an active subscription).
-2. Ask in Albanian or English, e.g.:
-   - "Cilat janë të drejtat e punëmarrësit sipas Kodit të Punës?"
-   - "What does Article 5 of Law 7895 say about property rights?"
-3. Answers are based only on uploaded documents, with source citations.
-
-## Stripe subscription setup
-
-1. Create an account at [Stripe](https://dashboard.stripe.com).
-2. In **Products**, create a product (e.g. "Albanian Law AI") and add a **recurring** price: **€9.99/month**.
-3. Copy the **Price ID** (starts with `price_`) into `.env` as `STRIPE_PRICE_ID`.
-4. In **Developers → API keys**, copy the **Secret key** into `.env` as `STRIPE_SECRET_KEY`.
-5. For **webhooks** (so subscription status stays in sync):
-   - **Developers → Webhooks → Add endpoint**: URL `https://your-domain.com/api/webhooks/stripe`.
-   - Events: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`.
-   - Copy the **Signing secret** into `.env` as `STRIPE_WEBHOOK_SECRET`.
-6. For local testing use the Stripe CLI: `stripe listen --forward-to localhost:8000/api/webhooks/stripe` and put the printed secret in `STRIPE_WEBHOOK_SECRET`.
-
-## PayPal subscription setup
-
-1. Create an account at [PayPal Developer](https://developer.paypal.com).
-2. In **Dashboard → My Apps & Credentials**, create an app and copy **Client ID** and **Secret** into `.env` as `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET`.
-3. Set `PAYPAL_MODE=sandbox` for testing or `live` for production.
-4. Create a **Product** and a **Plan** (recurring €9.99/month) under **Products and plans** in the Dashboard (or via [Subscriptions API](https://developer.paypal.com/docs/api/subscriptions/v1/)). Copy the **Plan ID** (starts with `P-`) into `.env` as `PAYPAL_PLAN_ID`.
-5. Ensure `FRONTEND_URL` is the full base URL of your app (e.g. `http://localhost:8000`). After the user approves on PayPal they are redirected to `{FRONTEND_URL}/api/subscription/paypal/confirm?token=...`, which syncs the subscription and redirects to `/?subscription=success`.
-6. Optional: add a webhook in the PayPal Dashboard for `BILLING.SUBSCRIPTION.*` events pointing to `https://your-domain.com/api/webhooks/paypal` so subscription updates (cancel, etc.) stay in sync.
+1. In Google Play Console, create a subscription product with ID `law_ai_monthly` (4.99 EUR/month, 1-day free trial).
+2. For server-side verification (recommended), create a Google Cloud Service Account with Android Publisher API access and set `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` env var to the path of the credentials JSON file.
+3. The mobile app uses `expo-iap` to handle purchase flow natively.
 
 ## Environment Variables
 
 | Variable               | Description |
 |------------------------|-------------|
-| `OPENAI_API_KEY`       | OpenAI API key (required for RAG) |
-| `JWT_SECRET`           | Secret for JWT signing (use a long random string) |
+| `OPENAI_API_KEY`       | OpenAI API key (required) |
+| `JWT_SECRET`           | Secret for JWT signing (use a long random hex string) |
+| `SUPABASE_URL`         | Supabase project URL |
+| `SUPABASE_ANON_KEY`    | Supabase anon/public key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (keep secret!) |
 | `ADMIN_EMAIL`          | Optional; this user gets admin (else first user is admin) |
-| `STRIPE_SECRET_KEY`    | Stripe secret key (for subscriptions) |
-| `STRIPE_WEBHOOK_SECRET`| Stripe webhook signing secret |
-| `STRIPE_PRICE_ID`      | Stripe Price ID for €9.99/month |
-| `FRONTEND_URL`         | Base URL for redirects (e.g. `http://localhost:8000`) |
-| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | PayPal API credentials (optional) |
-| `PAYPAL_MODE`          | `sandbox` or `live` |
-| `PAYPAL_PLAN_ID`       | PayPal Plan ID for €9.99/month (optional) |
-| `TRIAL_DAYS`           | Free trial length in days (default 3) |
-| `MAX_SIGNUPS_PER_IP_24H` | Max signups per IP in 24h (default 2) |
-| `BLOCK_DISPOSABLE_EMAILS` | Block known disposable email domains (default true) |
-| `LLM_MODEL`, `EMBEDDING_MODEL`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K_RESULTS` | Optional RAG/config |
+| `SERVER_URL`           | Production backend URL |
+| `FRONTEND_URL`         | Base URL for redirects |
+| `GOOGLE_PLAY_PACKAGE_NAME` | Android package name (default: `com.zagrid.albanianlawai`) |
+| `GOOGLE_PLAY_PRODUCT_ID` | Google Play subscription ID (default: `law_ai_monthly`) |
+| `SUBSCRIPTION_PRICE_EUR` | Subscription price (default: `4.99`) |
+| `TRIAL_DAYS`           | Free trial length in days (default: `1`) |
+| `MAX_SIGNUPS_PER_IP_24H` | Max signups per IP in 24h (default: `5`) |
+| `BLOCK_DISPOSABLE_EMAILS` | Block disposable email domains (default: `true`) |
+| `RATE_LIMIT_LOGIN`     | Login rate limit (default: `5/minute`) |
+| `RATE_LIMIT_CHAT`      | Chat rate limit (default: `30/minute`) |
 
 ## API Endpoints
 
@@ -161,21 +135,24 @@ A RAG-based (Retrieval-Augmented Generation) legal document Q&A system for Alban
 | `GET`    | `/`                               | Chat interface                     |
 | `GET`    | `/login`                          | Login / register page              |
 | `GET`    | `/admin`                          | Admin panel (admin only)           |
-| `POST`   | `/api/auth/register`              | Register                           |
-| `POST`   | `/api/auth/login`                 | Login                              |
-| `GET`    | `/api/auth/me`                    | Current user + subscription (auth) |
-| `POST`   | `/api/subscription/checkout`     | Create Stripe checkout (auth)       |
-| `POST`   | `/api/subscription/checkout-paypal` | Create PayPal subscription (auth) |
-| `GET`    | `/api/subscription/paypal/confirm`   | PayPal return URL (syncs sub, redirects) |
-| `GET`    | `/api/subscription/status`       | Subscription status (auth)          |
-| `POST`   | `/api/webhooks/stripe`            | Stripe webhook                     |
-| `POST`   | `/api/webhooks/paypal`            | PayPal webhook                     |
-| `POST`   | `/api/documents/upload`           | Upload document (admin)            |
-| `GET`    | `/api/documents`                  | List documents (admin)             |
-| `DELETE` | `/api/documents/{id}`             | Delete document (admin)            |
-| `POST`   | `/api/chat`                       | Send message (subscriber)          |
-| `GET`    | `/api/chat/history/{session_id}`  | Chat history (subscriber)           |
-| `GET`    | `/api/health`                     | Health check                       |
+| `GET`    | `/documents`                      | Document library                   |
+| `POST`   | `/api/auth/register`             | Register (rate limited: 5/min)     |
+| `POST`   | `/api/auth/login`                | Login (rate limited: 5/min)        |
+| `POST`   | `/api/auth/logout`               | Server-side logout                 |
+| `POST`   | `/api/auth/forgot-password`      | Send password reset email          |
+| `GET`    | `/api/auth/me`                   | Current user + subscription info   |
+| `POST`   | `/api/subscription/verify-google-play` | Verify Google Play purchase  |
+| `POST`   | `/api/subscription/restore`      | Restore subscription               |
+| `GET`    | `/api/subscription/status`       | Subscription status                |
+| `POST`   | `/api/user/documents/upload`     | Upload document (admin only)       |
+| `GET`    | `/api/user/documents`            | List documents                     |
+| `DELETE` | `/api/user/documents/{id}`       | Delete document (admin only)       |
+| `POST`   | `/api/chat`                      | Send message (rate limited: 30/min)|
+| `GET`    | `/api/chat/history/{session_id}` | Chat history                       |
+| `POST`   | `/api/suggest-questions`         | Search-assist suggestions          |
+| `GET`    | `/api/suggest-topics`            | Topic suggestions                  |
+| `GET`    | `/api/health`                    | Health check                       |
+| `POST`   | `/api/debug/search`             | Debug search (admin only)          |
 
 ## Cost Estimate
 

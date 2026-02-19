@@ -1,18 +1,46 @@
-"""Document parsing and chunking pipeline.
+"""Document parsing and chunking pipeline — production-ready.
 
 Supports: PDF (.pdf), Word (.docx), Text (.txt)
-Pipeline: Upload → Parse text → Extract metadata → Chunk → Store embeddings
+Pipeline: Upload → Parse text → Clean → Extract metadata → Chunk → Store embeddings
 """
 
 import re
-import os
+import logging
 import fitz  # PyMuPDF
 from docx import Document as DocxDocument
-from pathlib import Path
 from backend.config import settings
 
+logger = logging.getLogger("rag.processor")
 
-# ── Text Extraction ────────────────────────────────────────────
+
+# ── Text Cleaning ─────────────────────────────────────────────
+
+def clean_text(text: str) -> str:
+    """Clean extracted text: fix encoding artifacts, normalize whitespace."""
+    text = text.replace("\x00", "")
+    text = text.replace("\xad", "-")
+    text = text.replace("\u2013", "-")
+    text = text.replace("\u2014", "-")
+    text = text.replace("\u2018", "'")
+    text = text.replace("\u2019", "'")
+    text = text.replace("\u201c", '"')
+    text = text.replace("\u201d", '"')
+    text = text.replace("\u00ab", '"')
+    text = text.replace("\u00bb", '"')
+
+    text = re.sub(r'[^\S\n]+', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    lines = [line.strip() for line in text.split('\n')]
+    text = '\n'.join(lines)
+
+    text = re.sub(r'^\d{1,4}$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
+
+
+# ── Text Extraction ───────────────────────────────────────────
 
 def extract_text_from_pdf(file_path: str) -> list[dict]:
     """Extract text from PDF, returning page-level chunks with page numbers."""
@@ -21,12 +49,11 @@ def extract_text_from_pdf(file_path: str) -> list[dict]:
     for page_num in range(len(doc)):
         page = doc[page_num]
         text = page.get_text("text")
-        if text.strip():
-            pages.append({
-                "text": text.strip(),
-                "page": page_num + 1,
-            })
+        cleaned = clean_text(text)
+        if cleaned and len(cleaned) > 10:
+            pages.append({"text": cleaned, "page": page_num + 1})
     doc.close()
+    logger.info(f"PDF extracted: {len(pages)} pages from {file_path}")
     return pages
 
 
@@ -35,9 +62,12 @@ def extract_text_from_docx(file_path: str) -> list[dict]:
     doc = DocxDocument(file_path)
     full_text = []
     for para in doc.paragraphs:
-        if para.text.strip():
-            full_text.append(para.text.strip())
-    return [{"text": "\n".join(full_text), "page": 1}]
+        cleaned = para.text.strip()
+        if cleaned:
+            full_text.append(cleaned)
+    text = clean_text("\n".join(full_text))
+    logger.info(f"DOCX extracted: {len(text)} chars from {file_path}")
+    return [{"text": text, "page": 1}]
 
 
 def extract_text_from_txt(file_path: str) -> list[dict]:
@@ -46,8 +76,9 @@ def extract_text_from_txt(file_path: str) -> list[dict]:
     for enc in encodings:
         try:
             with open(file_path, "r", encoding=enc) as f:
-                text = f.read()
-            return [{"text": text.strip(), "page": 1}]
+                text = clean_text(f.read())
+            logger.info(f"TXT extracted: {len(text)} chars ({enc}) from {file_path}")
+            return [{"text": text, "page": 1}]
         except UnicodeDecodeError:
             continue
     raise ValueError("Could not decode text file with supported encodings.")
@@ -59,7 +90,7 @@ def extract_text(file_path: str, file_type: str) -> list[dict]:
         "pdf": extract_text_from_pdf,
         "docx": extract_text_from_docx,
         "txt": extract_text_from_txt,
-        "doc": extract_text_from_docx,  # Attempt DOCX parser on .doc
+        "doc": extract_text_from_docx,
     }
     extractor = extractors.get(file_type.lower())
     if not extractor:
@@ -67,227 +98,250 @@ def extract_text(file_path: str, file_type: str) -> list[dict]:
     return extractor(file_path)
 
 
-# ── Metadata Extraction ───────────────────────────────────────
+# ── Metadata Extraction ──────────────────────────────────────
 
 def extract_metadata(full_text: str) -> dict:
-    """Try to extract Albanian law metadata from document text.
-
-    Looks for patterns like:
-    - LIGJ Nr. 7895, datë 27.1.1995
-    - Ligji nr. 44/2015
-    - VENDIM Nr. 123, datë 15.3.2020
-    - FLETORJA ZYRTARE Nr. XX
-    """
+    """Extract Albanian law metadata from document text."""
     metadata = {}
+    header = full_text[:3000]
 
-    # Law number patterns
     law_patterns = [
+        r'LIGJ\s*[Nn][Rr]\.?\s*([\d/]+)',
         r'[Ll][Ii][Gg][Jj]\s*[Nn][Rr]\.?\s*([\d/]+)',
-        r'LIGJ\s*Nr\.?\s*([\d/]+)',
-        r'[Ll]igji?\s+nr\.?\s*([\d/]+)',
-        r'Nr\.?\s*([\d/]+)',
+        r'[Ll]igji?\s+[Nn]r\.?\s*([\d/]+)',
+        r'VENDIM\s*[Nn][Rr]\.?\s*([\d/]+)',
+        r'KODI\s+\w+',
     ]
     for pattern in law_patterns:
-        match = re.search(pattern, full_text[:2000])
+        match = re.search(pattern, header)
         if match:
-            metadata["law_number"] = match.group(1).strip()
+            metadata["law_number"] = (
+                match.group(1).strip() if match.lastindex else match.group(0).strip()
+            )
             break
 
-    # Date patterns
     date_patterns = [
         r'[Dd]at[ëe]\s+([\d]{1,2}[./][\d]{1,2}[./][\d]{4})',
         r'[Dd]at[ëe]s?\s+([\d]{1,2}\s+\w+\s+[\d]{4})',
         r'(\d{1,2}[./]\d{1,2}[./]\d{4})',
     ]
     for pattern in date_patterns:
-        match = re.search(pattern, full_text[:2000])
+        match = re.search(pattern, header)
         if match:
             metadata["law_date"] = match.group(1).strip()
             break
 
-    # Title (first substantial line)
-    lines = full_text.strip().split('\n')
-    for line in lines[:10]:
+    lines = header.strip().split('\n')
+    for line in lines[:15]:
         cleaned = line.strip()
-        if len(cleaned) > 10 and not cleaned.startswith('Nr'):
+        if len(cleaned) > 10 and not re.match(r'^[\d\s./]+$', cleaned):
             metadata["title"] = cleaned[:200]
             break
 
-    # Article detection for chunking hints
     articles = re.findall(r'[Nn]eni\s+(\d+)', full_text)
     if articles:
         metadata["article_count"] = len(set(articles))
 
+    logger.info(f"Metadata extracted: {metadata}")
     return metadata
 
 
-# ── Chunking ──────────────────────────────────────────────────
+# ── Chunking ─────────────────────────────────────────────────
 
 def chunk_text_by_articles(pages: list[dict], chunk_size: int = None,
                            chunk_overlap: int = None) -> list[dict]:
-    """Smart chunking that tries to respect article boundaries.
-
-    Strategy:
-    1. First try to split by articles (Neni X)
-    2. If articles are too long, split further by size
-    3. Maintain page references throughout
-    """
+    """Smart chunking that respects article boundaries."""
     chunk_size = chunk_size or settings.CHUNK_SIZE
     chunk_overlap = chunk_overlap or settings.CHUNK_OVERLAP
     chunks = []
 
-    # Combine all pages into one text with page markers
-    page_segments = []
-    for p in pages:
-        page_segments.append((p["text"], p["page"]))
-
-    # Build a combined text with page tracking
     combined_text = ""
     char_to_page = {}
     offset = 0
-    for text, page_num in page_segments:
+    for p in pages:
+        text = p["text"]
         for i in range(len(text)):
-            char_to_page[offset + i] = page_num
+            char_to_page[offset + i] = p["page"]
         combined_text += text + "\n\n"
         offset += len(text) + 2
 
-    # Try to split by articles first
     article_pattern = r'(?=\b[Nn]eni\s+\d+)'
     article_splits = re.split(article_pattern, combined_text)
-
-    # Remove empty splits
     article_splits = [s for s in article_splits if s.strip()]
 
+    def get_pages_for_range(start: int, length: int) -> list[int]:
+        page_set = set()
+        for i in range(start, min(start + length, len(combined_text))):
+            if i in char_to_page:
+                page_set.add(char_to_page[i])
+        return sorted(page_set) if page_set else [1]
+
     if len(article_splits) > 1:
-        # We found articles - use them as base chunks
         current_pos = 0
         for split_text in article_splits:
             start_pos = combined_text.find(split_text, current_pos)
             if start_pos == -1:
                 start_pos = current_pos
 
-            # Extract article number if present
             article_match = re.match(r'[Nn]eni\s+(\d+)', split_text.strip())
             article_num = article_match.group(1) if article_match else None
+            pages_in_chunk = get_pages_for_range(start_pos, len(split_text))
 
-            # Determine page range
-            pages_in_chunk = set()
-            for i in range(start_pos, min(start_pos + len(split_text), len(combined_text))):
-                if i in char_to_page:
-                    pages_in_chunk.add(char_to_page[i])
-
-            # If this article chunk is too large, split further
-            if len(split_text) > chunk_size * 2:
+            if len(split_text) > chunk_size * 1.5:
                 sub_chunks = _split_by_size(split_text, chunk_size, chunk_overlap)
-                for j, sub in enumerate(sub_chunks):
-                    chunks.append({
-                        "text": sub.strip(),
-                        "article": article_num,
-                        "pages": sorted(pages_in_chunk) if pages_in_chunk else [1],
-                        "chunk_index": len(chunks),
-                    })
+                for sub in sub_chunks:
+                    if len(sub.strip()) >= 30:
+                        chunks.append({
+                            "text": sub.strip(),
+                            "article": article_num,
+                            "pages": pages_in_chunk,
+                            "chunk_index": len(chunks),
+                        })
             else:
-                if split_text.strip():
+                text = split_text.strip()
+                if len(text) >= 30:
                     chunks.append({
-                        "text": split_text.strip(),
+                        "text": text,
                         "article": article_num,
-                        "pages": sorted(pages_in_chunk) if pages_in_chunk else [1],
+                        "pages": pages_in_chunk,
                         "chunk_index": len(chunks),
                     })
 
             current_pos = start_pos + len(split_text)
     else:
-        # No articles found - fall back to size-based chunking
         sub_chunks = _split_by_size(combined_text, chunk_size, chunk_overlap)
         for i, sub in enumerate(sub_chunks):
-            # Find pages for this chunk
-            start_pos = combined_text.find(sub[:50])
-            pages_in_chunk = set()
-            if start_pos >= 0:
-                for j in range(start_pos, min(start_pos + len(sub), len(combined_text))):
-                    if j in char_to_page:
-                        pages_in_chunk.add(char_to_page[j])
+            start_pos = combined_text.find(sub[:60])
+            pages_in_chunk = get_pages_for_range(max(start_pos, 0), len(sub))
+            if len(sub.strip()) >= 30:
+                chunks.append({
+                    "text": sub.strip(),
+                    "article": None,
+                    "pages": pages_in_chunk,
+                    "chunk_index": i,
+                })
 
-            chunks.append({
-                "text": sub.strip(),
-                "article": None,
-                "pages": sorted(pages_in_chunk) if pages_in_chunk else [1],
-                "chunk_index": i,
-            })
+    logger.info(
+        f"Chunking complete: {len(chunks)} chunks "
+        f"(target size: {chunk_size}, overlap: {chunk_overlap})"
+    )
 
-    return [c for c in chunks if len(c["text"]) > 20]
+    sizes = [len(c["text"]) for c in chunks]
+    if sizes:
+        logger.info(f"Chunk sizes: min={min(sizes)}, max={max(sizes)}, avg={sum(sizes)//len(sizes)}")
+
+    return chunks
 
 
 def _split_by_size(text: str, chunk_size: int, overlap: int) -> list[str]:
-    """Split text into overlapping chunks by character count."""
+    """Split text into overlapping chunks, respecting sentence boundaries."""
     chunks = []
     start = 0
-    while start < len(text):
+    text_len = len(text)
+
+    while start < text_len:
         end = start + chunk_size
 
-        # Try to break at a sentence or paragraph boundary
-        if end < len(text):
-            # Look for paragraph break
+        if end < text_len:
             newline_pos = text.rfind('\n\n', start + chunk_size // 2, end + 100)
             if newline_pos > start:
                 end = newline_pos
             else:
-                # Look for sentence end
                 period_pos = text.rfind('. ', start + chunk_size // 2, end + 50)
                 if period_pos > start:
                     end = period_pos + 1
+                else:
+                    space_pos = text.rfind(' ', start + chunk_size // 2, end + 20)
+                    if space_pos > start:
+                        end = space_pos
 
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
 
         start = end - overlap
-        if start >= len(text):
+        if start >= text_len:
             break
 
     return chunks
 
 
-# ── Full Processing Pipeline ──────────────────────────────────
+# ── Full Processing Pipeline ─────────────────────────────────
 
-async def process_document(doc_id: int, file_path: str, file_type: str):
-    """Full pipeline: extract → metadata → chunk → embed.
+async def process_document(doc_id: int, user_id: int,
+                           file_path: str, file_type: str):
+    """Full pipeline: extract → clean → metadata → chunk → embed.
 
-    Returns (chunks, metadata) on success, raises on failure.
+    Args:
+        doc_id: Document database ID
+        user_id: Owner user ID (for vector store isolation)
+        file_path: Path to the uploaded file
+        file_type: File extension (pdf, docx, txt)
     """
-    from backend.database import update_document_status
+    from backend.database import (
+        update_document_status, update_document_page_count,
+        insert_chunks, delete_chunks_for_document,
+        get_document,
+    )
     from backend.vector_store import add_chunks_to_store
 
     try:
         await update_document_status(doc_id, "processing")
+        logger.info(f"[doc:{doc_id}] Starting processing: {file_path} ({file_type})")
 
         # 1. Extract text
         pages = extract_text(file_path, file_type)
         if not pages:
             raise ValueError("No text could be extracted from the document.")
+        total_chars = sum(len(p["text"]) for p in pages)
+        page_count = len(pages)
+        logger.info(f"[doc:{doc_id}] Extracted {page_count} pages, {total_chars} chars total")
 
-        full_text = "\n\n".join(p["text"] for p in pages)
+        # Save page count
+        await update_document_page_count(doc_id, page_count)
 
         # 2. Extract metadata
+        full_text = "\n\n".join(p["text"] for p in pages)
         metadata = extract_metadata(full_text)
+
+        # Prefer the DB document title (admin-set or from filename)
+        # over the auto-extracted title which can be a law number
+        db_doc = await get_document(doc_id)
+        if db_doc:
+            db_title = db_doc.get("title") or ""
+            db_orig = db_doc.get("original_filename") or ""
+            if db_title and len(db_title) > 3:
+                metadata["title"] = db_title
+            elif db_orig:
+                # Use filename without extension as title
+                metadata["title"] = re.sub(r'\.[^.]+$', '', db_orig)
 
         # 3. Chunk
         chunks = chunk_text_by_articles(pages)
         if not chunks:
             raise ValueError("Document produced no usable text chunks.")
+        logger.info(f"[doc:{doc_id}] Created {len(chunks)} chunks")
 
-        # 4. Add to vector store
-        await add_chunks_to_store(doc_id, chunks, metadata)
+        # 4. Store chunks in ChromaDB (vector search)
+        await add_chunks_to_store(doc_id, user_id, chunks, metadata)
+        logger.info(f"[doc:{doc_id}] Stored {len(chunks)} embeddings (user_id={user_id})")
 
-        # 5. Update DB
+        # 5. Store chunks in SQLite FTS (keyword search)
+        await delete_chunks_for_document(doc_id)  # clear any old entries
+        await insert_chunks(doc_id, user_id, chunks)
+        logger.info(f"[doc:{doc_id}] Stored {len(chunks)} chunks in FTS index")
+
+        # 6. Update DB — status='ready'
         await update_document_status(
-            doc_id, "processed",
+            doc_id, "ready",
             total_chunks=len(chunks),
             metadata=metadata
         )
 
+        logger.info(f"[doc:{doc_id}] Processing complete: {len(chunks)} chunks, {page_count} pages")
         return chunks, metadata
 
     except Exception as e:
-        await update_document_status(doc_id, "error", error_message=str(e))
+        logger.error(f"[doc:{doc_id}] Processing failed: {e}")
+        await update_document_status(doc_id, "failed", error_message=str(e))
         raise

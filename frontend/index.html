@@ -45,27 +45,54 @@
                 <div class="card">
                     <h2 id="paywallOverlayTitle">Prova falas ka përfunduar</h2>
                     <p id="paywallOverlayMessage">Aktivizo abonimin për të vazhduar.</p>
-                    <p class="price" data-i18n="sub.price_month">€9.99 / muaj</p>
+                    <p class="price">4.99€ / muaj pas provës</p>
                     <div class="paywall-buttons">
-                        <button type="button" class="btn btn-primary" id="paywallOverlayStripe">Aktivizo abonimin</button>
-                        <button type="button" class="btn btn-paypal" id="paywallOverlayPayPal">Paguaj me PayPal</button>
+                        <button type="button" class="btn btn-primary" id="paywallOverlaySubscribe">Fillo provën falas (1 ditë)</button>
+                        <button type="button" class="btn btn-outline" id="paywallOverlayRestore">Rikthe blerjen</button>
                     </div>
+                    <p class="paywall-note">Pagesa përmes Google Play. 4.99€/muaj pas provës falas.</p>
                 </div>
             </div>
 
             <div class="chat-content">
+                <!-- Document toolbar: filter dropdown + upload -->
+                <div class="doc-toolbar" id="docToolbar" style="display:none;">
+                    <select id="docFilter" onchange="onDocFilterChange()">
+                        <option value="">Të gjitha dokumentet</option>
+                    </select>
+                    <span class="doc-status" id="docStatusIndicator"></span>
+                    <button type="button" class="btn-upload-mini" onclick="document.getElementById('fileUploadInput').click()">&#128206; Ngarko</button>
+                    <a href="/documents" class="btn-upload-mini" style="background:transparent; color:var(--primary); border-color:var(--border); text-decoration:none; display:inline-flex; align-items:center;">&#128196; Libraria</a>
+                    <button type="button" class="btn-debug-toggle" id="debugToggle" onclick="toggleDebugMode()" title="Debug mode OFF">&#128736;</button>
+                    <input type="file" id="fileUploadInput" class="hidden-file-input" accept=".pdf,.docx,.doc,.txt" onchange="handleFileUpload(this)">
+                </div>
+
+                <!-- Document management panel (slides from right) -->
+                <div class="doc-panel" id="docPanel">
+                    <div class="doc-panel-header">
+                        <span>Dokumentet e mia</span>
+                        <button type="button" class="btn-close-panel" onclick="toggleDocPanel()">&times;</button>
+                    </div>
+                    <div class="doc-panel-body" id="docPanelBody">
+                        <div class="empty-state" style="padding:1.5rem;">
+                            <p style="font-size:.85rem;">Nuk keni dokumente ende.</p>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="chat-messages" id="chatMessages">
                     <div class="message message-assistant">
-                        <div class="message-bubble">
+                        <div class="message-bubble welcome-bubble">
                             <p><strong data-i18n="chat.welcome_title">Mirë se vini në Albanian Law AI!</strong></p>
                             <p data-i18n="chat.welcome_body">Mund t'i përgjigjem pyetjeve bazuar në dokumentet juridike të ngarkuara. Më pyet çdo gjë për ligjet, rregulloret ose procedurat juridike shqiptare.</p>
-                            <p style="color:var(--text-muted); font-size:.85rem; margin-top:.5rem;" data-i18n="chat.welcome_note">Përgjigjem vetëm në bazë të dokumenteve të ngarkuara. Nëse nuk kam informacion të mjaftueshëm, do ta them.</p>
+                            <p class="welcome-note" data-i18n="chat.welcome_note">Përgjigjem vetëm në bazë të dokumenteve të ngarkuara. Nëse nuk kam informacion të mjaftueshëm, do ta them.</p>
                         </div>
                     </div>
                 </div>
                 <div class="chat-input-area">
+                    <div id="suggestPanel" class="suggest-panel" style="display:none;"></div>
                     <div class="chat-input-wrapper">
-                        <textarea id="chatInput" rows="1" onkeydown="handleKeyDown(event)" oninput="autoResize(this)" placeholder="Shkruaj pyetjen tënde për ligjet shqiptare…" title=""></textarea>
+                        <textarea id="chatInput" rows="1" onkeydown="handleKeyDown(event)" oninput="autoResize(this); onInputChange(this);" placeholder="Shkruaj pyetjen tënde për ligjet shqiptare…" title=""></textarea>
                         <button class="btn btn-primary btn-send" onclick="sendMessage()" id="sendBtn" title="Dërgo">&#10148;</button>
                     </div>
                     <p class="chat-disclaimer" data-i18n="chat.disclaimer">Përgjigjet bazohen vetëm në dokumentet e ngarkuara. Kontrollo gjithmonë me burime zyrtare.</p>
@@ -81,7 +108,7 @@
                 <button type="button" class="auth-tab" data-tab="login" data-i18n="auth.sign_in">Hyr</button>
                 <button type="button" class="auth-tab active" data-tab="register">Regjistrohu</button>
             </div>
-            <p class="auth-subtitle" id="authModalSubtitle" style="margin-bottom:1rem;" data-i18n="auth.signup_to_start">Regjistrohu falas për 3 ditë provë dhe fillo të bisedosh.</p>
+            <p class="auth-subtitle" id="authModalSubtitle" style="margin-bottom:1rem;" data-i18n="auth.signup_to_start">Regjistrohu falas për 1 ditë provë dhe fillo të bisedosh.</p>
             <div id="authModalLogin" class="auth-form" style="display:none;">
                 <form onsubmit="return handleModalLogin(event)">
                     <div class="form-group">
@@ -207,6 +234,10 @@
                 document.getElementById('sidebarSignup').style.display = 'none';
                 document.getElementById('sidebarUser').style.display = 'block';
                 document.getElementById('sidebarUserEmail').textContent = data.user.email;
+
+                // Store admin flag globally for chat.js to use
+                window._isAdmin = !!data.user.is_admin;
+
                 if (data.user.is_admin) document.getElementById('linkAdmin').style.display = 'block';
 
                 var hasSubscription = data.subscription && data.subscription.status;
@@ -220,18 +251,32 @@
                     document.getElementById('paywallOverlay').style.display = 'none';
                     window._canSend = true;
                 } else if (inTrial) {
-                    document.getElementById('sidebarUpgrade').style.display = 'inline-flex';
+                    document.getElementById('sidebarUpgrade').style.display = 'none';
                     document.getElementById('paywallOverlay').style.display = 'none';
                     window._canSend = true;
                     var banner = document.getElementById('trialBanner');
                     banner.style.display = 'block';
-                    if (trialHours !== null && trialHours < 24) {
-                        banner.textContent = t('trial.warning_24h');
-                        banner.className = 'trial-banner trial-banner-warning';
+                    banner.className = 'trial-banner';
+                    // Show "Prova falas aktive deri më [date/time]"
+                    var trialEnd = data.trial && data.trial.trial_ends_at;
+                    if (trialEnd) {
+                        try {
+                            var endDate = new Date(trialEnd + 'Z');
+                            var day = endDate.getDate().toString().padStart(2, '0');
+                            var month = (endDate.getMonth() + 1).toString().padStart(2, '0');
+                            var year = endDate.getFullYear();
+                            var hours = endDate.getHours().toString().padStart(2, '0');
+                            var mins = endDate.getMinutes().toString().padStart(2, '0');
+                            var formatted = day + '/' + month + '/' + year + ' ' + hours + ':' + mins;
+                            banner.textContent = 'Prova falas aktive deri më ' + formatted;
+                            if (trialHours !== null && trialHours < 6) {
+                                banner.className = 'trial-banner trial-banner-warning';
+                            }
+                        } catch (e) {
+                            banner.textContent = 'Prova falas aktive';
+                        }
                     } else {
-                        var msg = trialDays === 0 ? t('trial.last_day') : (trialDays === 1 ? t('trial.days_left_one') : (trialDays != null ? t('trial.days_left', { n: trialDays }) : t('trial.on_trial')));
-                        banner.textContent = msg;
-                        banner.className = 'trial-banner';
+                        banner.textContent = 'Prova falas aktive (24 orë)';
                     }
                 } else {
                     document.getElementById('sidebarUpgrade').style.display = 'inline-flex';
@@ -240,23 +285,23 @@
                     window._canSend = false;
                     document.getElementById('paywallOverlayTitle').textContent = t('paywall.trial_ended_short');
                     document.getElementById('paywallOverlayMessage').textContent = t('paywall.activate_to_continue');
-                    document.getElementById('paywallOverlayStripe').textContent = t('sub.activate');
-                    document.getElementById('paywallOverlayStripe').onclick = async function() {
-                        try {
-                            var r = await fetch('/api/subscription/checkout', { method: 'POST', headers: authHeaders() });
-                            var d = await r.json();
-                            if (d.checkout_url) window.location.href = d.checkout_url;
-                            else showToast(d.detail || t('error.generic'), 'error');
-                        } catch (e) { showToast(e.message || t('error.generic'), 'error'); }
-                    };
-                    document.getElementById('paywallOverlayPayPal').onclick = async function() {
-                        try {
-                            var r = await fetch('/api/subscription/checkout-paypal', { method: 'POST', headers: authHeaders() });
-                            var d = await r.json();
-                            if (d.approval_url) window.location.href = d.approval_url;
-                            else showToast(d.detail || t('error.generic'), 'error');
-                        } catch (e) { showToast(e.message || t('error.generic'), 'error'); }
-                    };
+                    var subscribeBtn = document.getElementById('paywallOverlaySubscribe');
+                    if (subscribeBtn) {
+                        subscribeBtn.onclick = function() {
+                            showToast('Hap aplikacionin mobil për të aktivizuar abonimin përmes Google Play.', 'info');
+                        };
+                    }
+                    var restoreBtn = document.getElementById('paywallOverlayRestore');
+                    if (restoreBtn) {
+                        restoreBtn.onclick = async function() {
+                            try {
+                                var r = await fetch('/api/subscription/restore', { method: 'POST', headers: authHeaders() });
+                                var d = await r.json();
+                                if (d.restored) { showToast('Abonimi u rikthye me sukses!', 'success'); setTimeout(function() { window.location.reload(); }, 1000); }
+                                else showToast(d.message || 'Nuk u gjet asnjë abonim aktiv.', 'warning');
+                            } catch (e) { showToast(e.message || t('error.generic'), 'error'); }
+                        };
+                    }
                 }
             } catch (e) {
                 if (typeof clearToken === 'function') clearToken();
@@ -265,6 +310,13 @@
         })();
 
         function logout() {
+            var token = typeof getToken === 'function' ? getToken() : null;
+            if (token) {
+                fetch('/api/auth/logout', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token },
+                }).catch(function(){});
+            }
             if (typeof clearToken === 'function') clearToken();
             window.location.href = '/';
         }
