@@ -16,6 +16,5 @@ COPY run.py .
 RUN mkdir -p /app/uploads /app/data
 
 ENV PORT=8000
-EXPOSE ${PORT}
 
-CMD python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}
+CMD ["sh", "-c", "python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT"]
