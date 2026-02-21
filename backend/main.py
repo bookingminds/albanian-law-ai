@@ -49,6 +49,8 @@ from backend.auth import (
     get_current_user, get_current_user_optional, require_admin, require_subscription,
 )
 from backend.database import get_active_subscription, upsert_subscription
+import aiosqlite
+from backend.database import DB_PATH
 
 SUBSCRIPTION_PRICE_EUR = 4.99
 from backend.trial_abuse import is_disposable_email, get_client_ip
@@ -1273,6 +1275,24 @@ async def suggest_questions(
 
 
 # ── Health Check ──────────────────────────────────────────────
+
+@app.post("/api/admin/promote")
+async def promote_to_admin(request: Request):
+    """One-time admin promotion secured by JWT_SECRET."""
+    body = await request.json()
+    secret = body.get("secret", "")
+    email = body.get("email", "").strip().lower()
+    if not email or secret != settings.JWT_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
+        await db.commit()
+        cursor = await db.execute("SELECT id, email, is_admin FROM users WHERE email = ?", (email,))
+        row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"ok": True, "user": {"id": row[0], "email": row[1], "is_admin": bool(row[2])}}
+
 
 @app.get("/health")
 @app.get("/api/health")
