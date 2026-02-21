@@ -110,6 +110,18 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    if request.url.path.startswith("/api"):
+        logger.error(f"Unhandled error on {request.url.path}: {exc}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error", "error": str(exc)},
+        )
+    raise exc
+
+
 _cors_origins = list({
     settings.FRONTEND_URL,
     settings.SERVER_URL,
@@ -1353,17 +1365,32 @@ async def promote_to_admin(request: Request):
 @app.get("/health")
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok"}
+    db_status = "ok"
+    try:
+        pool = await _get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+    except Exception as e:
+        db_status = f"error: {e}"
+    return {"status": "ok", "db": db_status}
 
 
 @app.get("/api/health/detailed")
 async def health_check_detailed():
     from backend.vector_store import get_store_stats
+    db_status = "ok"
+    try:
+        pool = await _get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+    except Exception as e:
+        db_status = f"error: {e}"
     docs = await get_all_documents()
     ready = [d for d in docs if d.get("status") == "ready"]
     stats = get_store_stats()
     return {
         "status": "healthy",
+        "db": db_status,
         "documents_total": len(docs),
         "documents_ready": len(ready),
         "vector_store": stats,
