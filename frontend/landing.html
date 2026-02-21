@@ -2,7 +2,8 @@
 <html lang="sq">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0f2c">
     <title>Albanian Law AI — Asistenti juridik me inteligjencë artificiale</title>
     <meta name="description" content="Asistent juridik i fuqizuar nga AI për ligjin shqiptare. Bëj pyetje, merr përgjigje të sakta me burime dhe referenca ligjore.">
     <meta property="og:title" content="Albanian Law AI">
@@ -89,13 +90,51 @@
         .footer a { color:var(--text-muted); margin:0 8px; }
         .footer a:hover { color:#fff; }
 
-        @media (max-width:640px) {
+        /* ── Tablet ────────────────────────────────── */
+        @media (max-width:768px) {
             .nav { padding:12px 16px; }
-            .nav-links { gap:12px; }
+            .nav-links { gap:14px; }
             .nav-links a:not(.nav-cta) { display:none; }
-            .hero { padding:100px 20px 60px; }
-            .hero-buttons { flex-direction:column; align-items:center; }
-            .btn-hero { width:100%; max-width:280px; text-align:center; }
+            .hero { padding:100px 20px 60px; min-height:auto; }
+            .hero::before { width:400px; height:400px; }
+            .hero-buttons { flex-direction:column; align-items:center; width:100%; }
+            .btn-hero { width:100%; max-width:320px; text-align:center; padding:14px 24px; }
+            .features { padding:48px 16px 64px; }
+            .features-grid { grid-template-columns:1fr; gap:16px; }
+            .feature-card { padding:24px 20px; }
+            .how { padding:48px 16px 64px; }
+            .steps { grid-template-columns:1fr; gap:24px; margin-top:32px; }
+            .pricing-preview { padding:48px 16px 64px; }
+            .pricing-card { padding:28px 20px; }
+            .pricing-features { max-width:100%; }
+            .section-title { font-size:1.4rem; margin-bottom:32px; }
+            .footer { padding:28px 16px; }
+        }
+
+        /* ── Small phones (320–480px) ─────────────── */
+        @media (max-width:480px) {
+            .nav { padding:10px 12px; }
+            .nav-logo { font-size:.95rem; gap:8px; }
+            .nav-logo img { width:28px; height:28px; }
+            .nav-cta { padding:7px 14px; font-size:.82rem; }
+            .hero { padding:80px 16px 48px; }
+            .hero-badge { font-size:.72rem; padding:5px 12px; margin-bottom:16px; }
+            .hero h1 { font-size:1.75rem; margin-bottom:14px; }
+            .hero p { font-size:.9rem; margin-bottom:24px; }
+            .btn-hero { font-size:.9rem; padding:13px 20px; border-radius:10px; max-width:100%; }
+            .section-label { font-size:.7rem; letter-spacing:1.5px; }
+            .section-title { font-size:1.25rem; margin-bottom:24px; }
+            .feature-icon { width:40px; height:40px; font-size:1.2rem; border-radius:10px; margin-bottom:12px; }
+            .feature-card h3 { font-size:1rem; }
+            .feature-card p { font-size:.85rem; }
+            .step-num { width:40px; height:40px; font-size:1rem; }
+            .step h3 { font-size:.95rem; }
+            .step p { font-size:.82rem; }
+            .pricing-card .price-big { font-size:2rem; }
+            .pricing-card .price-trial { font-size:.85rem; }
+            .pricing-features li { font-size:.85rem; padding:6px 0; }
+            .footer p { font-size:.75rem; }
+            .footer a { margin:0 5px; font-size:.75rem; }
         }
     </style>
 </head>
