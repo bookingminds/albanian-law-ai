@@ -21,7 +21,7 @@ logger = logging.getLogger("rag.api")
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Depends
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -53,8 +53,8 @@ from backend.database import (
     get_active_suggested_questions, get_all_suggested_questions,
     create_suggested_question, update_suggested_question, delete_suggested_question,
 )
-import aiosqlite
-from backend.database import DB_PATH
+from backend.database import _get_pool
+from backend.file_storage import upload_file as storage_upload, download_file as storage_download, delete_file as storage_delete, storage_path_for_doc
 
 SUBSCRIPTION_PRICE_EUR = 4.99
 from backend.trial_abuse import is_disposable_email, get_client_ip
@@ -80,6 +80,8 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Topic index build skipped: {e}")
     logger.info("Application startup complete")
     yield
+    from backend.database import close_pool
+    await close_pool()
 
 
 async def _run_chroma_migration():
@@ -340,13 +342,13 @@ async def auth_me(user: dict = Depends(get_current_user)):
     """Return current user, subscription status, and trial info."""
     from backend.database import set_trial_ends_at
     sub_row = await get_active_subscription(user["id"])
-    sub = {"status": sub_row["status"], "current_period_end": sub_row.get("current_period_end", ""), "price_eur": SUBSCRIPTION_PRICE_EUR} if sub_row else None
+    sub = {"status": sub_row["status"], "current_period_end": str(sub_row["current_period_end"]) if sub_row.get("current_period_end") else "", "price_eur": SUBSCRIPTION_PRICE_EUR} if sub_row else None
     trial_ends_at = user.get("trial_ends_at")
     trial_used_at = user.get("trial_used_at")
     in_trial = False
     trial_days_left = None
     trial_hours_left = None
-    if not trial_ends_at or not trial_ends_at.strip():
+    if not trial_ends_at or (isinstance(trial_ends_at, str) and not trial_ends_at.strip()):
         if not trial_used_at:
             new_end = (
                 datetime.utcnow() + timedelta(days=settings.TRIAL_DAYS)
@@ -355,7 +357,10 @@ async def auth_me(user: dict = Depends(get_current_user)):
             trial_ends_at = new_end
     if not sub and trial_ends_at and not trial_used_at:
         try:
-            end = datetime.fromisoformat(trial_ends_at.replace("Z", ""))
+            if isinstance(trial_ends_at, datetime):
+                end = trial_ends_at.replace(tzinfo=None)
+            else:
+                end = datetime.fromisoformat(str(trial_ends_at).replace("Z", ""))
             now = datetime.utcnow()
             if now < end:
                 in_trial = True
@@ -373,8 +378,8 @@ async def auth_me(user: dict = Depends(get_current_user)):
         "subscription": sub,
         "subscription_price_eur": SUBSCRIPTION_PRICE_EUR,
         "trial": {
-            "trial_ends_at": trial_ends_at,
-            "trial_used_at": trial_used_at,
+            "trial_ends_at": str(trial_ends_at) if trial_ends_at else None,
+            "trial_used_at": str(trial_used_at) if trial_used_at else None,
             "in_trial": in_trial,
             "trial_days_left": trial_days_left,
             "trial_hours_left": trial_hours_left,
@@ -388,7 +393,7 @@ async def auth_me(user: dict = Depends(get_current_user)):
 @app.get("/api/subscription/status")
 async def subscription_status(user: dict = Depends(get_current_user)):
     sub = await get_active_subscription(user["id"])
-    result = {"status": sub["status"], "current_period_end": sub.get("current_period_end", ""), "price_eur": SUBSCRIPTION_PRICE_EUR} if sub else None
+    result = {"status": sub["status"], "current_period_end": str(sub["current_period_end"]) if sub.get("current_period_end") else "", "price_eur": SUBSCRIPTION_PRICE_EUR} if sub else None
     return {"subscription": result, "price_eur": SUBSCRIPTION_PRICE_EUR}
 
 
@@ -507,7 +512,7 @@ async def restore_purchase(user: dict = Depends(get_current_user)):
     """Check if user has an active subscription (for restore purchase flow)."""
     sub = await get_active_subscription(user["id"])
     if sub and sub["status"] in ("active", "trialing"):
-        return {"restored": True, "status": sub["status"], "current_period_end": sub.get("current_period_end", "")}
+        return {"restored": True, "status": sub["status"], "current_period_end": str(sub["current_period_end"]) if sub.get("current_period_end") else ""}
     return {"restored": False, "message": "Nuk u gjet asnjë abonim aktiv."}
 
 
@@ -545,14 +550,11 @@ async def user_upload_document(
             detail=f"Skedari është shumë i madh. Maksimumi: {MAX_FILE_SIZE_MB}MB"
         )
 
-    # Save file
     unique_name = f"{uuid.uuid4().hex}_{file.filename}"
-    file_path = settings.UPLOAD_DIR / unique_name
+    spath = storage_path_for_doc(user["id"], unique_name)
+    content_type = file.content_type or "application/octet-stream"
+    await storage_upload(spath, content, content_type)
 
-    with open(file_path, "wb") as f:
-        f.write(content)
-
-    # Create DB record with user_id
     doc_id = await create_document(
         user_id=user["id"],
         filename=unique_name,
@@ -562,9 +564,8 @@ async def user_upload_document(
         title=title,
     )
 
-    # Process in background
     asyncio.create_task(
-        _process_in_background(doc_id, user["id"], str(file_path), ext)
+        _process_in_background(doc_id, user["id"], content, ext)
     )
 
     return JSONResponse({
@@ -591,7 +592,7 @@ async def list_user_documents(user: dict = Depends(require_admin)):
                 "total_chunks": d.get("total_chunks", 0),
                 "page_count": d.get("page_count", 0),
                 "error_message": d.get("error_message"),
-                "uploaded_at": d.get("uploaded_at"),
+                "uploaded_at": str(d["uploaded_at"]) if d.get("uploaded_at") else None,
             }
             for d in docs
         ]
@@ -623,9 +624,8 @@ async def user_delete_document(doc_id: int, user: dict = Depends(require_admin))
 
     await delete_document_chunks(doc_id)
 
-    file_path = settings.UPLOAD_DIR / doc["filename"]
-    if file_path.exists():
-        os.remove(file_path)
+    spath = storage_path_for_doc(user["id"], doc["filename"])
+    await storage_delete(spath)
 
     await delete_document(doc_id)
     return {"message": "Dokumenti u fshi me sukses."}
@@ -643,16 +643,16 @@ async def user_retry_document(doc_id: int, user: dict = Depends(require_admin)):
             detail="Vetëm dokumentet e dështuara mund të ripërpunohen."
         )
 
-    file_path = str(settings.UPLOAD_DIR / doc["filename"])
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Skedari nuk u gjet në disk.")
+    spath = storage_path_for_doc(user["id"], doc["filename"])
+    try:
+        file_bytes = await storage_download(spath)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Skedari nuk u gjet në storage.")
 
-    # Delete old chunks if any
     await delete_document_chunks(doc_id)
 
-    # Reprocess
     asyncio.create_task(
-        _process_in_background(doc_id, user["id"], file_path, doc["file_type"])
+        _process_in_background(doc_id, user["id"], file_bytes, doc["file_type"])
     )
 
     return {"status": "processing", "doc_id": doc_id, "message": "Ripërpunimi ka filluar."}
@@ -704,21 +704,23 @@ async def serve_user_document_pdf(
     doc = await get_document_for_user(doc_id, user["id"])
     if not doc:
         raise HTTPException(status_code=404, detail="Dokumenti nuk u gjet.")
-    file_path = settings.UPLOAD_DIR / doc["filename"]
-    if not file_path.exists():
+    spath = storage_path_for_doc(user["id"], doc["filename"])
+    try:
+        file_bytes = await storage_download(spath)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Skedari nuk u gjet.")
-    return FileResponse(
-        str(file_path),
+    return Response(
+        content=file_bytes,
         media_type="application/pdf",
-        filename=doc.get("original_filename", "document.pdf"),
+        headers={"Content-Disposition": f'inline; filename="{doc.get("original_filename", "document.pdf")}"'},
     )
 
 
 async def _process_in_background(doc_id: int, user_id: int,
-                                  file_path: str, file_type: str):
+                                  file_bytes: bytes, file_type: str):
     """Background task for document processing."""
     try:
-        await process_document(doc_id, user_id, file_path, file_type)
+        await process_document(doc_id, user_id, file_bytes, file_type)
     except Exception as e:
         logger.error(f"[ERROR] Processing document {doc_id}: {e}")
 
@@ -743,11 +745,10 @@ async def upload_document(
         )
 
     unique_name = f"{uuid.uuid4().hex}_{file.filename}"
-    file_path = settings.UPLOAD_DIR / unique_name
     content = await file.read()
-
-    with open(file_path, "wb") as f:
-        f.write(content)
+    spath = storage_path_for_doc(user["id"], unique_name)
+    content_type = file.content_type or "application/octet-stream"
+    await storage_upload(spath, content, content_type)
 
     doc_id = await create_document(
         user_id=user["id"],
@@ -761,7 +762,7 @@ async def upload_document(
     )
 
     asyncio.create_task(
-        _process_in_background(doc_id, user["id"], str(file_path), ext)
+        _process_in_background(doc_id, user["id"], content, ext)
     )
 
     return JSONResponse({
@@ -793,9 +794,9 @@ async def remove_document(doc_id: int, user: dict = Depends(require_admin)):
     if not doc:
         raise HTTPException(status_code=404, detail="Dokumenti nuk u gjet.")
     await delete_document_chunks(doc_id)
-    file_path = settings.UPLOAD_DIR / doc["filename"]
-    if file_path.exists():
-        os.remove(file_path)
+    doc_owner = doc.get("user_id") or user["id"]
+    spath = storage_path_for_doc(doc_owner, doc["filename"])
+    await storage_delete(spath)
     await delete_document(doc_id)
     return {"message": "Document deleted successfully."}
 
@@ -1340,14 +1341,13 @@ async def promote_to_admin(request: Request):
     email = body.get("email", "").strip().lower()
     if not email or secret != settings.JWT_SECRET:
         raise HTTPException(status_code=403, detail="Forbidden")
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE users SET is_admin = 1 WHERE email = ?", (email,))
-        await db.commit()
-        cursor = await db.execute("SELECT id, email, is_admin FROM users WHERE email = ?", (email,))
-        row = await cursor.fetchone()
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE users SET is_admin = TRUE WHERE email = $1", email)
+        row = await conn.fetchrow("SELECT id, email, is_admin FROM users WHERE email = $1", email)
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"ok": True, "user": {"id": row[0], "email": row[1], "is_admin": bool(row[2])}}
+    return {"ok": True, "user": {"id": row["id"], "email": row["email"], "is_admin": bool(row["is_admin"])}}
 
 
 @app.get("/health")
@@ -1415,15 +1415,16 @@ async def debug_reprocess(doc_id: int, user: dict = Depends(require_admin)):
     doc = await get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
-    file_path = str(settings.UPLOAD_DIR / doc["filename"])
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found on disk.")
-    # Delete from both vector store and SQLite FTS
+    doc_user_id = doc.get("user_id") or user["id"]
+    spath = storage_path_for_doc(doc_user_id, doc["filename"])
+    try:
+        file_bytes = await storage_download(spath)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found in storage.")
     await delete_document_chunks(doc_id)
     await delete_chunks_for_document(doc_id)
-    doc_user_id = doc.get("user_id") or user["id"]
     asyncio.create_task(
-        process_document(doc_id, doc_user_id, file_path, doc["file_type"])
+        _process_in_background(doc_id, doc_user_id, file_bytes, doc["file_type"])
     )
     return {
         "status": "reprocessing",

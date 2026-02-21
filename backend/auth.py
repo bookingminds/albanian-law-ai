@@ -245,16 +245,19 @@ async def require_subscription(user: dict = Depends(get_current_user)):
             detail="Provë falas e përfunduar. Aktivizo abonimin për të vazhduar.",
         )
     trial_ends_at = user.get("trial_ends_at")
-    if not trial_ends_at or not trial_ends_at.strip():
+    if not trial_ends_at or (isinstance(trial_ends_at, str) and not trial_ends_at.strip()):
         new_end = (datetime.utcnow() + timedelta(days=settings.TRIAL_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
         await set_trial_ends_at(user["id"], new_end)
         return user
     try:
-        end = datetime.fromisoformat(trial_ends_at.replace("Z", "").strip())
+        if isinstance(trial_ends_at, datetime):
+            end = trial_ends_at.replace(tzinfo=None)
+        else:
+            end = datetime.fromisoformat(str(trial_ends_at).replace("Z", "").strip())
         now = datetime.utcnow()
         if now < end:
             return user
-        await mark_trial_used(user["id"], trial_ends_at)
+        await mark_trial_used(user["id"], str(trial_ends_at))
     except Exception:
         new_end = (datetime.utcnow() + timedelta(days=settings.TRIAL_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
         await set_trial_ends_at(user["id"], new_end)

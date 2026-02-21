@@ -6,11 +6,9 @@ and deduplicates.
 """
 
 import logging
-import aiosqlite
-from backend.config import settings
+from backend.database import _get_pool
 
 logger = logging.getLogger("rag.stitcher")
-DB_PATH = str(settings.DB_PATH)
 
 
 async def stitch_neighbors(chunks: list[dict], window: int = 1) -> list[dict]:
@@ -30,15 +28,13 @@ async def stitch_neighbors(chunks: list[dict], window: int = 1) -> list[dict]:
             c["neighbor_indices"] = [c.get("chunk_index", 0)]
         return chunks
 
-    # Group chunks by document to batch DB queries
     doc_chunks: dict[str, list[dict]] = {}
     for c in chunks:
         doc_id = str(c.get("doc_id") or c.get("document_id", ""))
         doc_chunks.setdefault(doc_id, []).append(c)
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
         for doc_id, doc_chunk_list in doc_chunks.items():
             if not doc_id:
                 for c in doc_chunk_list:
@@ -46,26 +42,23 @@ async def stitch_neighbors(chunks: list[dict], window: int = 1) -> list[dict]:
                     c["neighbor_indices"] = [c.get("chunk_index", 0)]
                 continue
 
-            # Collect all chunk_indexes we need (target ± window)
             needed_indexes = set()
             for c in doc_chunk_list:
                 idx = c.get("chunk_index", 0)
                 for offset in range(-window, window + 1):
                     needed_indexes.add(idx + offset)
 
-            # Fetch all needed chunks from DB in one query
-            placeholders = ",".join("?" * len(needed_indexes))
-            rows = await db.execute(
+            sorted_indexes = sorted(needed_indexes)
+            placeholders = ", ".join(f"${i+2}" for i in range(len(sorted_indexes)))
+            rows = await conn.fetch(
                 f"""SELECT chunk_index, content
                     FROM document_chunks
-                    WHERE document_id = ? AND chunk_index IN ({placeholders})
+                    WHERE document_id = $1 AND chunk_index IN ({placeholders})
                     ORDER BY chunk_index""",
-                [int(doc_id)] + sorted(needed_indexes)
+                int(doc_id), *sorted_indexes,
             )
-            fetched = {row["chunk_index"]: row["content"]
-                       async for row in rows}
+            fetched = {row["chunk_index"]: row["content"] for row in rows}
 
-            # Build stitched text for each target chunk
             for c in doc_chunk_list:
                 idx = c.get("chunk_index", 0)
                 parts = []

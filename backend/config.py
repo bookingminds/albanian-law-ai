@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     SERVER_URL: str = "http://localhost:8000"
     FRONTEND_URL: str = "http://localhost:8000"
 
+    # Database
+    DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
+
     # Paths
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
     UPLOAD_DIR: Path = Path(os.environ.get("UPLOAD_DIR", str(BASE_DIR / "uploads")))

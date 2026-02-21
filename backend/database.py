@@ -1,29 +1,63 @@
-"""SQLite database for document metadata, chunks tracking, chat history, users."""
+"""PostgreSQL database for document metadata, chunks tracking, chat history, users.
 
-import aiosqlite
+Uses asyncpg with a connection pool. Falls back to SQLite (aiosqlite) when
+DATABASE_URL is not set (local development).
+"""
+
+import asyncpg
 import json
+import logging
+import re
 from datetime import datetime
-from pathlib import Path
 from backend.config import settings
 
-DB_PATH = str(settings.DB_PATH)
+logger = logging.getLogger("rag.database")
+
+_pool: asyncpg.Pool | None = None
 
 
-async def get_db():
-    """Get a database connection."""
-    db = await aiosqlite.connect(DB_PATH)
-    db.row_factory = aiosqlite.Row
-    return db
+async def _get_pool() -> asyncpg.Pool:
+    global _pool
+    if _pool is None:
+        url = settings.DATABASE_URL
+        if not url:
+            raise RuntimeError("DATABASE_URL is not set")
+        _pool = await asyncpg.create_pool(url, min_size=2, max_size=10)
+        logger.info("PostgreSQL connection pool created")
+    return _pool
+
+
+async def close_pool():
+    global _pool
+    if _pool:
+        await _pool.close()
+        _pool = None
 
 
 async def init_db():
-    """Initialize database tables and run migrations."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        # ── Documents (with user_id for multi-user isolation) ──
-        await db.execute("""
+    """Create tables, indexes, and seed data."""
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        # ── Users ──
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT DEFAULT '',
+                is_admin BOOLEAN DEFAULT FALSE,
+                supabase_uid TEXT UNIQUE,
+                trial_ends_at TIMESTAMPTZ,
+                trial_used_at TIMESTAMPTZ,
+                signup_ip TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+
+        # ── Documents ──
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS documents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
                 filename TEXT NOT NULL,
                 original_filename TEXT NOT NULL,
                 file_type TEXT NOT NULL,
@@ -33,63 +67,19 @@ async def init_db():
                 law_date TEXT,
                 status TEXT DEFAULT 'processing',
                 total_chunks INTEGER DEFAULT 0,
+                page_count INTEGER DEFAULT 0,
                 error_message TEXT,
                 metadata_json TEXT DEFAULT '{}',
-                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                processed_at TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id)
+                uploaded_at TIMESTAMPTZ DEFAULT NOW(),
+                processed_at TIMESTAMPTZ
             )
         """)
 
-        # ── Chat messages ──
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS chat_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                sources_json TEXT DEFAULT '[]',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # ── Users ──
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT DEFAULT '',
-                is_admin INTEGER DEFAULT 0,
-                supabase_uid TEXT UNIQUE,
-                trial_ends_at TIMESTAMP,
-                trial_used_at TIMESTAMP,
-                signup_ip TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # ── Subscriptions (Google Play Billing) ──
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS subscriptions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                purchase_token TEXT,
-                product_id TEXT,
-                platform TEXT DEFAULT 'google_play',
-                status TEXT NOT NULL,
-                current_period_end TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            )
-        """)
-        await db.commit()
-
-        # ── Document chunks (for keyword / FTS5 search) ──
-        await db.execute("""
+        # ── Document Chunks ──
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS document_chunks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                document_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
                 user_id INTEGER NOT NULL,
                 chunk_index INTEGER NOT NULL,
                 content TEXT NOT NULL,
@@ -97,24 +87,52 @@ async def init_db():
                 pages TEXT,
                 page_start INTEGER,
                 page_end INTEGER,
-                char_count INTEGER DEFAULT 0,
-                FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+                char_count INTEGER DEFAULT 0
             )
         """)
-        await db.commit()
 
-        # FTS5 virtual table for keyword search
-        try:
-            await db.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts
-                USING fts5(content, content='document_chunks', content_rowid='id')
-            """)
-            await db.commit()
-        except Exception:
-            pass  # FTS5 may already exist or not be available
+        # ── Chat Messages ──
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id SERIAL PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                sources_json TEXT DEFAULT '[]',
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
 
-        # Indexes for performance
-        for idx_sql in [
+        # ── Subscriptions ──
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                purchase_token TEXT,
+                product_id TEXT,
+                platform TEXT DEFAULT 'google_play',
+                status TEXT NOT NULL,
+                current_period_end TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+
+        # ── Suggested Questions ──
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS suggested_questions (
+                id SERIAL PRIMARY KEY,
+                category TEXT NOT NULL,
+                question TEXT NOT NULL,
+                sort_order INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(category, question)
+            )
+        """)
+
+        # ── Indexes ──
+        index_statements = [
             "CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status)",
             "CREATE INDEX IF NOT EXISTS idx_documents_user_status ON documents(user_id, status)",
@@ -122,108 +140,21 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_chunks_user_id ON document_chunks(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_chunks_user_doc ON document_chunks(user_id, document_id)",
             "CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id)",
-        ]:
-            await db.execute(idx_sql)
-        await db.commit()
+            "CREATE INDEX IF NOT EXISTS idx_sq_active ON suggested_questions(is_active)",
+        ]
+        for stmt in index_statements:
+            await conn.execute(stmt)
 
-        # ── Migrations ──────────────────────────────────────────
-
-        # Migration: add page_count to documents if missing
-        cursor = await db.execute("PRAGMA table_info(documents)")
-        rows = await cursor.fetchall()
-        doc_cols_pre = [row[1] for row in rows]
-        if "page_count" not in doc_cols_pre:
-            await db.execute("ALTER TABLE documents ADD COLUMN page_count INTEGER DEFAULT 0")
-            await db.commit()
-
-        # Migration: add Google Play columns if missing
-        cursor = await db.execute("PRAGMA table_info(subscriptions)")
-        rows = await cursor.fetchall()
-        columns = [row[1] for row in rows]
-        if "purchase_token" not in columns:
-            await db.execute("ALTER TABLE subscriptions ADD COLUMN purchase_token TEXT")
-            await db.commit()
-        if "product_id" not in columns:
-            await db.execute("ALTER TABLE subscriptions ADD COLUMN product_id TEXT")
-            await db.commit()
-        if "platform" not in columns:
-            await db.execute("ALTER TABLE subscriptions ADD COLUMN platform TEXT DEFAULT 'google_play'")
-            await db.commit()
-
-        # Migration: add trial and signup_ip to users if missing
-        cursor = await db.execute("PRAGMA table_info(users)")
-        rows = await cursor.fetchall()
-        user_columns = [row[1] for row in rows]
-        if "trial_ends_at" not in user_columns:
-            await db.execute("ALTER TABLE users ADD COLUMN trial_ends_at TIMESTAMP")
-            await db.commit()
-        if "trial_used_at" not in user_columns:
-            await db.execute("ALTER TABLE users ADD COLUMN trial_used_at TIMESTAMP")
-            await db.commit()
-        if "signup_ip" not in user_columns:
-            await db.execute("ALTER TABLE users ADD COLUMN signup_ip TEXT")
-            await db.commit()
-        if "supabase_uid" not in user_columns:
-            await db.execute("ALTER TABLE users ADD COLUMN supabase_uid TEXT")
-            await db.commit()
-            try:
-                await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_supabase_uid ON users(supabase_uid)")
-                await db.commit()
-            except Exception:
-                pass
-
-        # Migration: add user_id to documents if missing
-        cursor = await db.execute("PRAGMA table_info(documents)")
-        rows = await cursor.fetchall()
-        doc_columns = [row[1] for row in rows]
-        if "user_id" not in doc_columns:
-            await db.execute("ALTER TABLE documents ADD COLUMN user_id INTEGER")
-            await db.commit()
-            # Assign existing documents to first admin user
-            cursor = await db.execute(
-                "SELECT id FROM users WHERE is_admin = 1 ORDER BY id LIMIT 1"
-            )
-            admin_row = await cursor.fetchone()
-            if admin_row:
-                admin_id = admin_row[0]
-                await db.execute(
-                    "UPDATE documents SET user_id = ? WHERE user_id IS NULL",
-                    (admin_id,)
-                )
-                await db.commit()
-
-        # Migration: rename status values (processed->ready, error->failed)
-        await db.execute(
-            "UPDATE documents SET status = 'ready' WHERE status = 'processed'"
-        )
-        await db.execute(
-            "UPDATE documents SET status = 'failed' WHERE status = 'error'"
-        )
-        await db.commit()
-
-        # ── Suggested Questions ──
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS suggested_questions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category TEXT NOT NULL,
-                question TEXT NOT NULL,
-                sort_order INTEGER DEFAULT 0,
-                is_active INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(category, question)
-            )
+        # GIN index for full-text search on chunk content
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chunks_fts
+            ON document_chunks USING GIN (to_tsvector('simple', content))
         """)
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sq_active ON suggested_questions(is_active)"
-        )
-        await db.commit()
 
-        # Seed 50 default questions if table is empty
-        cursor = await db.execute("SELECT COUNT(*) FROM suggested_questions")
-        count_row = await cursor.fetchone()
-        if count_row[0] == 0:
+        # ── Seed suggested questions ──
+        count = await conn.fetchval("SELECT COUNT(*) FROM suggested_questions")
+        if count == 0:
             seed_questions = [
-                # Punësim (10)
                 ("Punësim", "Sa ditë pushim vjetor kam sipas ligjit në Shqipëri?", 1),
                 ("Punësim", "A mund të më pushojë punëdhënësi pa paralajmërim?", 2),
                 ("Punësim", "Sa është periudha e njoftimit për largim nga puna?", 3),
@@ -234,7 +165,6 @@ async def init_db():
                 ("Punësim", "A lejohet puna me dy kontrata në të njëjtën kohë?", 8),
                 ("Punësim", "Si llogaritet paga minimale në Shqipëri?", 9),
                 ("Punësim", "Çfarë ndodh nëse nuk më paguajnë rrogën në kohë?", 10),
-                # Tatime & Biznes (10)
                 ("Tatime & Biznes", "Sa është tatimi mbi fitimin për bizneset e vogla në Shqipëri?", 1),
                 ("Tatime & Biznes", "Si regjistrohet një biznes i ri?", 2),
                 ("Tatime & Biznes", "Cilat janë detyrimet tatimore për një freelancer?", 3),
@@ -245,7 +175,6 @@ async def init_db():
                 ("Tatime & Biznes", "Çfarë detyrimesh ka një person i vetëpunësuar?", 8),
                 ("Tatime & Biznes", "A duhet të paguaj sigurime shoqërore si biznes?", 9),
                 ("Tatime & Biznes", "Si bëhet ndryshimi i statusit të biznesit?", 10),
-                # Familje (10)
                 ("Familje", "Si bëhet procedura e divorcit në Shqipëri?", 1),
                 ("Familje", "Si ndahet pasuria pas divorcit?", 2),
                 ("Familje", "Si përcaktohet kujdestaria e fëmijëve?", 3),
@@ -256,7 +185,6 @@ async def init_db():
                 ("Familje", "Cilat janë të drejtat e bashkëshortëve në martesë?", 8),
                 ("Familje", "Si bëhet ndarja e pasurisë së përbashkët?", 9),
                 ("Familje", "A lejohet martesa me dy mbiemra në Shqipëri?", 10),
-                # Pronë & Pasuri (10)
                 ("Pronë & Pasuri", "Si regjistrohet një pronë në Shqipëri?", 1),
                 ("Pronë & Pasuri", "Çfarë dokumentesh duhen për shitje prone?", 2),
                 ("Pronë & Pasuri", "Si bëhet kalimi i pronësisë së një apartamenti?", 3),
@@ -267,7 +195,6 @@ async def init_db():
                 ("Pronë & Pasuri", "Çfarë të drejtash ka qiramarrësi sipas ligjit?", 8),
                 ("Pronë & Pasuri", "Si llogaritet taksa e pronës?", 9),
                 ("Pronë & Pasuri", "Si bëhet trashëgimia e një prone?", 10),
-                # Penale (10)
                 ("Penale", "Çfarë konsiderohet vepër penale sipas ligjit shqiptar?", 1),
                 ("Penale", "Cilat janë dënimet për mashtrim?", 2),
                 ("Penale", "Si bëhet një kallëzim penal?", 3),
@@ -279,11 +206,13 @@ async def init_db():
                 ("Penale", "Çfarë ndodh në rast dhune në familje?", 9),
                 ("Penale", "Si bëhet ankimi ndaj një vendimi penal?", 10),
             ]
-            await db.executemany(
-                "INSERT OR IGNORE INTO suggested_questions (category, question, sort_order) VALUES (?, ?, ?)",
+            await conn.executemany(
+                "INSERT INTO suggested_questions (category, question, sort_order) "
+                "VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
                 seed_questions,
             )
-            await db.commit()
+
+    logger.info("Database initialized successfully")
 
 
 # ── Document CRUD ──────────────────────────────────────────────
@@ -292,270 +221,224 @@ async def create_document(user_id: int, filename: str, original_filename: str,
                           file_type: str, file_size: int,
                           title: str = None, law_number: str = None,
                           law_date: str = None) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
             """INSERT INTO documents
                (user_id, filename, original_filename, file_type, file_size,
                 title, law_number, law_date, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'processing')""",
-            (user_id, filename, original_filename, file_type, file_size,
-             title, law_number, law_date)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'processing')
+               RETURNING id""",
+            user_id, filename, original_filename, file_type, file_size,
+            title, law_number, law_date,
         )
-        await db.commit()
-        return cursor.lastrowid
+        return row["id"]
 
 
 async def update_document_status(doc_id: int, status: str,
                                   total_chunks: int = None,
                                   error_message: str = None,
                                   metadata: dict = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        fields = ["status = ?"]
-        values = [status]
+    pool = await _get_pool()
+    parts = ["status = $1"]
+    values: list = [status]
+    idx = 2
 
-        if total_chunks is not None:
-            fields.append("total_chunks = ?")
-            values.append(total_chunks)
-        if error_message is not None:
-            fields.append("error_message = ?")
-            values.append(error_message)
-        if metadata is not None:
-            fields.append("metadata_json = ?")
-            values.append(json.dumps(metadata))
-            if metadata.get("title"):
-                fields.append("title = COALESCE(NULLIF(title, ''), ?)")
-                values.append(metadata["title"])
-            if metadata.get("law_number"):
-                fields.append("law_number = COALESCE(NULLIF(law_number, ''), ?)")
-                values.append(metadata["law_number"])
-            if metadata.get("law_date"):
-                fields.append("law_date = COALESCE(NULLIF(law_date, ''), ?)")
-                values.append(metadata["law_date"])
-        if status in ("ready", "failed"):
-            fields.append("processed_at = ?")
-            values.append(datetime.utcnow().isoformat())
+    if total_chunks is not None:
+        parts.append(f"total_chunks = ${idx}"); values.append(total_chunks); idx += 1
+    if error_message is not None:
+        parts.append(f"error_message = ${idx}"); values.append(error_message); idx += 1
+    if metadata is not None:
+        parts.append(f"metadata_json = ${idx}"); values.append(json.dumps(metadata)); idx += 1
+        if metadata.get("title"):
+            parts.append(f"title = COALESCE(NULLIF(title, ''), ${idx})")
+            values.append(metadata["title"]); idx += 1
+        if metadata.get("law_number"):
+            parts.append(f"law_number = COALESCE(NULLIF(law_number, ''), ${idx})")
+            values.append(metadata["law_number"]); idx += 1
+        if metadata.get("law_date"):
+            parts.append(f"law_date = COALESCE(NULLIF(law_date, ''), ${idx})")
+            values.append(metadata["law_date"]); idx += 1
+    if status in ("ready", "failed"):
+        parts.append(f"processed_at = ${idx}")
+        values.append(datetime.utcnow().isoformat()); idx += 1
 
-        values.append(doc_id)
-        query = f"UPDATE documents SET {', '.join(fields)} WHERE id = ?"
-        await db.execute(query, values)
-        await db.commit()
+    values.append(doc_id)
+    query = f"UPDATE documents SET {', '.join(parts)} WHERE id = ${idx}"
+    async with pool.acquire() as conn:
+        await conn.execute(query, *values)
 
 
 async def get_all_documents():
-    """Get all documents (admin view)."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM documents ORDER BY uploaded_at DESC"
-        )
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM documents ORDER BY uploaded_at DESC")
+        return [dict(r) for r in rows]
 
 
 async def get_user_documents(user_id: int):
-    """Get documents owned by a specific user."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM documents WHERE user_id = ? ORDER BY uploaded_at DESC",
-            (user_id,)
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM documents WHERE user_id = $1 ORDER BY uploaded_at DESC",
+            user_id,
         )
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        return [dict(r) for r in rows]
 
 
 async def get_user_ready_documents(user_id: int):
-    """Get only ready (processed) documents for a user — used for search dropdown."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
             """SELECT id, title, original_filename, total_chunks, uploaded_at
-               FROM documents
-               WHERE user_id = ? AND status = 'ready'
+               FROM documents WHERE user_id = $1 AND status = 'ready'
                ORDER BY uploaded_at DESC""",
-            (user_id,)
+            user_id,
         )
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        return [dict(r) for r in rows]
 
 
 async def get_all_ready_documents():
-    """Get ALL ready documents regardless of owner — for global chat search."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
             """SELECT id, user_id, title, original_filename, total_chunks
                FROM documents WHERE status = 'ready'
                ORDER BY uploaded_at DESC"""
         )
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        return [dict(r) for r in rows]
 
 
 async def get_document(doc_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM documents WHERE id = ?", (doc_id,)
-        )
-        row = await cursor.fetchone()
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM documents WHERE id = $1", doc_id)
         return dict(row) if row else None
 
 
 async def get_document_for_user(doc_id: int, user_id: int):
-    """Get a document only if it belongs to the user (RLS)."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM documents WHERE id = ? AND user_id = ?",
-            (doc_id, user_id)
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM documents WHERE id = $1 AND user_id = $2",
+            doc_id, user_id,
         )
-        row = await cursor.fetchone()
         return dict(row) if row else None
 
 
 async def delete_document(doc_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
-        await db.commit()
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM documents WHERE id = $1", doc_id)
 
 
 async def count_user_documents(user_id: int) -> int:
-    """Count total documents for a user."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM documents WHERE user_id = ?", (user_id,)
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT COUNT(*) FROM documents WHERE user_id = $1", user_id
         )
-        row = await cursor.fetchone()
-        return row[0] if row else 0
 
 
 async def rename_document(doc_id: int, new_title: str):
-    """Rename a document's title."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE documents SET title = ? WHERE id = ?",
-            (new_title.strip(), doc_id)
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE documents SET title = $1 WHERE id = $2",
+            new_title.strip(), doc_id,
         )
-        await db.commit()
 
 
 async def update_document_page_count(doc_id: int, page_count: int):
-    """Set the page count for a document."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE documents SET page_count = ? WHERE id = ?",
-            (page_count, doc_id)
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE documents SET page_count = $1 WHERE id = $2",
+            page_count, doc_id,
         )
-        await db.commit()
 
 
 # ── Document Chunks (for keyword search) ──────────────────────
 
 async def insert_chunks(document_id: int, user_id: int, chunks: list[dict]):
-    """Insert chunk texts into SQLite for FTS keyword search."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        records = []
         for c in chunks:
             pages_str = ",".join(str(p) for p in c.get("pages", []))
             page_list = c.get("pages", [])
-            cursor = await db.execute(
-                """INSERT INTO document_chunks
-                   (document_id, user_id, chunk_index, content, article,
-                    pages, page_start, page_end, char_count)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (document_id, user_id, c.get("chunk_index", 0),
-                 c["text"], c.get("article") or "",
-                 pages_str,
-                 min(page_list) if page_list else 0,
-                 max(page_list) if page_list else 0,
-                 len(c["text"]))
-            )
-            # Sync FTS index
-            try:
-                await db.execute(
-                    "INSERT INTO document_chunks_fts(rowid, content) VALUES (?, ?)",
-                    (cursor.lastrowid, c["text"])
-                )
-            except Exception:
-                pass
-        await db.commit()
+            records.append((
+                document_id, user_id, c.get("chunk_index", 0),
+                c["text"], c.get("article") or "",
+                pages_str,
+                min(page_list) if page_list else 0,
+                max(page_list) if page_list else 0,
+                len(c["text"]),
+            ))
+        await conn.executemany(
+            """INSERT INTO document_chunks
+               (document_id, user_id, chunk_index, content, article,
+                pages, page_start, page_end, char_count)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+            records,
+        )
 
 
 async def delete_chunks_for_document(document_id: int):
-    """Delete all chunks for a document from SQLite (and FTS)."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        # Get chunk IDs for FTS cleanup
-        cursor = await db.execute(
-            "SELECT id FROM document_chunks WHERE document_id = ?",
-            (document_id,)
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM document_chunks WHERE document_id = $1", document_id
         )
-        rows = await cursor.fetchall()
-        for row in rows:
-            try:
-                await db.execute(
-                    "INSERT INTO document_chunks_fts(document_chunks_fts, rowid, content) "
-                    "VALUES('delete', ?, '')",
-                    (row[0],)
-                )
-            except Exception:
-                pass
-        await db.execute(
-            "DELETE FROM document_chunks WHERE document_id = ?",
-            (document_id,)
-        )
-        await db.commit()
 
 
 async def keyword_search_chunks(query: str, user_id: int = None,
                                  document_id: int = None,
                                  limit: int = 30) -> list[dict]:
-    """Full-text keyword search using FTS5.
+    """Full-text keyword search using PostgreSQL tsvector."""
+    pool = await _get_pool()
+    tsquery = _build_pg_tsquery(query)
+    if not tsquery:
+        return []
 
-    If user_id is None, search ALL chunks globally (used for normal-user chat).
-    If user_id is set, scope to that user's chunks.
-    Optional document_id further narrows to a single document.
+    where_parts = ["to_tsvector('simple', dc.content) @@ to_tsquery('simple', $1)"]
+    params: list = [tsquery]
+    idx = 2
+
+    if user_id is not None:
+        where_parts.append(f"dc.user_id = ${idx}"); params.append(user_id); idx += 1
+    if document_id:
+        where_parts.append(f"dc.document_id = ${idx}"); params.append(document_id); idx += 1
+
+    params.append(limit)
+    where_clause = " AND ".join(where_parts)
+
+    sql = f"""
+        SELECT dc.*,
+               ts_rank(to_tsvector('simple', dc.content),
+                       to_tsquery('simple', $1)) AS fts_rank
+        FROM document_chunks dc
+        WHERE {where_clause}
+        ORDER BY fts_rank DESC
+        LIMIT ${idx}
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        fts_query = _build_fts_query(query)
 
-        where_parts = ["document_chunks_fts MATCH ?"]
-        params: list = [fts_query]
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+            return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"FTS query failed: {e}")
+        return []
 
-        if user_id is not None:
-            where_parts.append("dc.user_id = ?")
-            params.append(user_id)
-        if document_id:
-            where_parts.append("dc.document_id = ?")
-            params.append(document_id)
 
-        params.append(limit)
-        where_clause = " AND ".join(where_parts)
-
-        sql = f"""
-            SELECT dc.*, fts.rank AS fts_rank
-            FROM document_chunks dc
-            JOIN document_chunks_fts fts ON fts.rowid = dc.id
-            WHERE {where_clause}
-            ORDER BY fts.rank
-            LIMIT ?
-        """
-
-        try:
-            cursor = await db.execute(sql, params)
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
-        except Exception:
-            return []
-
+# ── Albanian FTS helpers ──────────────────────────────────────
 
 _ALBANIAN_STOPWORDS = frozenset(
     'dhe ose per nga nje tek te ne me se ka si do jane eshte nuk qe i e '
     'ky kjo keto ato por nese edhe mund duhet'.split()
 )
 
-# Albanian legal-term stem families — map any variant to its root + siblings
-# so a search for "arsimi" also matches "arsim", "arsimor", etc.
 _STEM_FAMILIES = {
     'arsim': [
         'arsim', 'arsimi', 'arsimin', 'arsimit', 'arsimim', 'arsimimi',
@@ -619,90 +502,59 @@ _STEM_FAMILIES = {
     ],
 }
 
-# Reverse index: word -> stem family root
 _WORD_TO_STEM: dict[str, str] = {}
 for _root, _variants in _STEM_FAMILIES.items():
     for _v in _variants:
         _WORD_TO_STEM[_v] = _root
 
 
-def _build_fts_query(query: str) -> str:
-    """Build an FTS5 query string with Albanian stemming + legal term handling.
-
-    Strategy:
-    - Extract exact "Neni XX" phrases and keep them quoted
-    - Expand Albanian word forms to their stem family for broader recall
-    - Use prefix matching (word*) as final fallback
-    - Strip stopwords
-    """
-    import re
-
+def _build_pg_tsquery(query: str) -> str:
+    """Build a PostgreSQL tsquery string with Albanian stemming."""
     tokens = []
-
-    # 1. Keep exact article references as phrases
-    neni_matches = re.findall(r'[Nn]eni\s+\d+', query)
-    for m in neni_matches:
-        tokens.append(f'"{m}"')
-
-    ligj_matches = re.findall(r'[Ll]igj\w*\s+[Nn]r\.?\s*\d+', query)
-    for m in ligj_matches:
-        tokens.append(f'"{m}"')
-
-    # 2. Extract individual words, expand stems
     words = re.findall(r'\b\w{2,}\b', query)
     seen = set()
     for w in words:
         wl = w.lower()
-        if wl in _ALBANIAN_STOPWORDS:
-            continue
-        if wl in seen:
+        if wl in _ALBANIAN_STOPWORDS or wl in seen:
             continue
         seen.add(wl)
 
-        # Check if this word belongs to a stem family
         stem_root = _WORD_TO_STEM.get(wl)
         if stem_root:
-            # Add all family variants with OR
             family = _STEM_FAMILIES[stem_root]
-            group = " OR ".join(family)
-            tokens.append(f"({group})")
+            tokens.append("(" + " | ".join(family) + ")")
         else:
-            # Use prefix matching for 3+ char words
             if len(wl) >= 4:
-                tokens.append(f"{wl}*")
+                tokens.append(f"{wl}:*")
             else:
                 tokens.append(wl)
 
-    if not tokens:
-        return query
-
-    return " OR ".join(tokens)
+    return " | ".join(tokens) if tokens else ""
 
 
 # ── Chat CRUD ──────────────────────────────────────────────────
 
 async def save_chat_message(session_id: str, role: str, content: str,
                             sources: list = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
             """INSERT INTO chat_messages (session_id, role, content, sources_json)
-               VALUES (?, ?, ?, ?)""",
-            (session_id, role, content, json.dumps(sources or []))
+               VALUES ($1, $2, $3, $4)""",
+            session_id, role, content, json.dumps(sources or []),
         )
-        await db.commit()
 
 
 async def get_chat_history(session_id: str, limit: int = 20):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
             """SELECT * FROM chat_messages
-               WHERE session_id = ?
-               ORDER BY created_at DESC LIMIT ?""",
-            (session_id, limit)
+               WHERE session_id = $1
+               ORDER BY created_at DESC LIMIT $2""",
+            session_id, limit,
         )
-        rows = await cursor.fetchall()
-        results = [dict(row) for row in rows]
+        results = [dict(r) for r in rows]
         results.reverse()
         return results
 
@@ -716,56 +568,54 @@ async def create_user(
     trial_ends_at: str = None,
     signup_ip: str = None,
 ) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
             """INSERT INTO users (email, password_hash, is_admin, trial_ends_at, signup_ip)
-               VALUES (?, ?, ?, ?, ?)""",
-            (email.lower().strip(), password_hash, 1 if is_admin else 0,
-             trial_ends_at or "", signup_ip or "")
+               VALUES ($1, $2, $3, $4, $5) RETURNING id""",
+            email.lower().strip(), password_hash, is_admin,
+            trial_ends_at or "", signup_ip or "",
         )
-        await db.commit()
-        return cursor.lastrowid
+        return row["id"]
 
 
 async def get_user_by_id(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-        row = await cursor.fetchone()
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
         return dict(row) if row else None
 
 
 async def get_user_by_email(email: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM users WHERE email = ?", (email.lower().strip(),)
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM users WHERE email = $1", email.lower().strip()
         )
-        row = await cursor.fetchone()
         return dict(row) if row else None
 
 
 async def get_users_count() -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT COUNT(*) FROM users")
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval("SELECT COUNT(*) FROM users")
 
 
 async def get_user_by_supabase_uid(uid: str):
     if not uid:
         return None
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM users WHERE supabase_uid = ?", (uid,))
-        row = await cursor.fetchone()
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM users WHERE supabase_uid = $1", uid)
         return dict(row) if row else None
 
 
 async def link_supabase_uid(user_id: int, uid: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE users SET supabase_uid = ? WHERE id = ?", (uid, user_id))
-        await db.commit()
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET supabase_uid = $1 WHERE id = $2", uid, user_id
+        )
 
 
 async def create_user_from_supabase(
@@ -775,160 +625,155 @@ async def create_user_from_supabase(
     trial_ends_at: str = None,
     signup_ip: str = None,
 ) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
             """INSERT INTO users (email, password_hash, is_admin, supabase_uid, trial_ends_at, signup_ip)
-               VALUES (?, '', ?, ?, ?, ?)""",
-            (email.lower().strip(), 1 if is_admin else 0,
-             supabase_uid, trial_ends_at or "", signup_ip or "")
+               VALUES ($1, '', $2, $3, $4, $5) RETURNING id""",
+            email.lower().strip(), is_admin,
+            supabase_uid, trial_ends_at or "", signup_ip or "",
         )
-        await db.commit()
-        return cursor.lastrowid
-
-
+        return row["id"]
 
 
 async def count_signups_from_ip_last_24h(ip: str) -> int:
     if not ip or not ip.strip():
         return 0
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
             """SELECT COUNT(*) FROM users
-               WHERE signup_ip = ? AND created_at > datetime('now', '-1 day')""",
-            (ip.strip(),)
+               WHERE signup_ip = $1 AND created_at > NOW() - INTERVAL '1 day'""",
+            ip.strip(),
         )
-        row = await cursor.fetchone()
-        return row[0] if row else 0
 
 
 async def set_trial_ends_at(user_id: int, trial_ends_at: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE users SET trial_ends_at = ? WHERE id = ?",
-            (trial_ends_at, user_id)
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET trial_ends_at = $1 WHERE id = $2",
+            trial_ends_at, user_id,
         )
-        await db.commit()
 
 
 async def mark_trial_used(user_id: int, at: str = None):
     at = at or datetime.utcnow().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE users SET trial_used_at = ? WHERE id = ?",
-            (at, user_id)
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET trial_used_at = $1 WHERE id = $2", at, user_id
         )
-        await db.commit()
 
 
 async def set_trial_used_on_subscription(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE users SET trial_used_at = COALESCE(trial_used_at, ?) WHERE id = ?",
-            (datetime.utcnow().isoformat(), user_id)
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET trial_used_at = COALESCE(trial_used_at, $1) WHERE id = $2",
+            datetime.utcnow().isoformat(), user_id,
         )
-        await db.commit()
 
 
-# ── Subscriptions (Google Play Billing only) ─────────────────
+# ── Subscriptions ─────────────────────────────────────────────
 
 async def upsert_subscription(user_id: int, purchase_token: str,
                               product_id: str, status: str,
                               current_period_end: str,
                               platform: str = "google_play"):
-    """Upsert subscription from Google Play purchase."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT id FROM subscriptions WHERE purchase_token = ?",
-            (purchase_token,)
+    pool = await _get_pool()
+    now = datetime.utcnow().isoformat()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id FROM subscriptions WHERE purchase_token = $1",
+            purchase_token,
         )
-        row = await cursor.fetchone()
-        now = datetime.utcnow().isoformat()
         if row:
-            await db.execute(
-                """UPDATE subscriptions SET status = ?, current_period_end = ?,
-                   updated_at = ?, product_id = ?, platform = ?
-                   WHERE purchase_token = ?""",
-                (status, current_period_end, now, product_id, platform,
-                 purchase_token)
+            await conn.execute(
+                """UPDATE subscriptions SET status = $1, current_period_end = $2,
+                   updated_at = $3, product_id = $4, platform = $5
+                   WHERE purchase_token = $6""",
+                status, current_period_end, now, product_id, platform,
+                purchase_token,
             )
         else:
-            await db.execute(
+            await conn.execute(
                 """INSERT INTO subscriptions
                    (user_id, purchase_token, product_id, status,
                     current_period_end, platform, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, purchase_token, product_id, status,
-                 current_period_end, platform, now)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                user_id, purchase_token, product_id, status,
+                current_period_end, platform, now,
             )
-        await db.commit()
 
 
 async def get_active_subscription(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
             """SELECT * FROM subscriptions
-               WHERE user_id = ? AND status IN ('active', 'trialing')
-               AND (current_period_end IS NULL OR current_period_end > datetime('now'))
+               WHERE user_id = $1 AND status IN ('active', 'trialing')
+               AND (current_period_end IS NULL OR current_period_end > NOW())
                ORDER BY updated_at DESC LIMIT 1""",
-            (user_id,)
+            user_id,
         )
-        row = await cursor.fetchone()
         return dict(row) if row else None
 
 
 # ── Suggested Questions CRUD ──────────────────────────────────
 
 async def get_active_suggested_questions():
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT id, category, question FROM suggested_questions WHERE is_active = 1 ORDER BY category, sort_order"
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, category, question FROM suggested_questions WHERE is_active = TRUE ORDER BY category, sort_order"
         )
-        rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
 
 async def get_all_suggested_questions():
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
             "SELECT * FROM suggested_questions ORDER BY category, sort_order"
         )
-        rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
 
 async def create_suggested_question(category: str, question: str, sort_order: int = 0):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "INSERT INTO suggested_questions (category, question, sort_order) VALUES (?, ?, ?)",
-            (category, question, sort_order),
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO suggested_questions (category, question, sort_order) VALUES ($1, $2, $3) RETURNING id",
+            category, question, sort_order,
         )
-        await db.commit()
-        return cursor.lastrowid
+        return row["id"]
 
 
 async def update_suggested_question(qid: int, category: str = None, question: str = None,
                                      is_active: bool = None, sort_order: int = None):
-    fields, values = [], []
+    parts, values = [], []
+    idx = 1
     if category is not None:
-        fields.append("category = ?"); values.append(category)
+        parts.append(f"category = ${idx}"); values.append(category); idx += 1
     if question is not None:
-        fields.append("question = ?"); values.append(question)
+        parts.append(f"question = ${idx}"); values.append(question); idx += 1
     if is_active is not None:
-        fields.append("is_active = ?"); values.append(1 if is_active else 0)
+        parts.append(f"is_active = ${idx}"); values.append(is_active); idx += 1
     if sort_order is not None:
-        fields.append("sort_order = ?"); values.append(sort_order)
-    if not fields:
+        parts.append(f"sort_order = ${idx}"); values.append(sort_order); idx += 1
+    if not parts:
         return
     values.append(qid)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(f"UPDATE suggested_questions SET {', '.join(fields)} WHERE id = ?", values)
-        await db.commit()
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE suggested_questions SET {', '.join(parts)} WHERE id = ${idx}",
+            *values,
+        )
 
 
 async def delete_suggested_question(qid: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM suggested_questions WHERE id = ?", (qid,))
-        await db.commit()
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM suggested_questions WHERE id = $1", qid)

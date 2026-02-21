@@ -2,8 +2,11 @@
 
 Supports: PDF (.pdf), Word (.docx), Text (.txt)
 Pipeline: Upload → Parse text → Clean → Extract metadata → Chunk → Store embeddings
+
+All extractors accept raw bytes (no local filesystem needed).
 """
 
+import io
 import re
 import logging
 import fitz  # PyMuPDF
@@ -40,12 +43,11 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-# ── Text Extraction ───────────────────────────────────────────
+# ── Text Extraction (from bytes) ─────────────────────────────
 
-def extract_text_from_pdf(file_path: str) -> list[dict]:
-    """Extract text from PDF, returning page-level chunks with page numbers."""
+def extract_text_from_pdf_bytes(data: bytes) -> list[dict]:
     pages = []
-    doc = fitz.open(file_path)
+    doc = fitz.open(stream=data, filetype="pdf")
     for page_num in range(len(doc)):
         page = doc[page_num]
         text = page.get_text("text")
@@ -53,49 +55,46 @@ def extract_text_from_pdf(file_path: str) -> list[dict]:
         if cleaned and len(cleaned) > 10:
             pages.append({"text": cleaned, "page": page_num + 1})
     doc.close()
-    logger.info(f"PDF extracted: {len(pages)} pages from {file_path}")
+    logger.info(f"PDF extracted: {len(pages)} pages from bytes ({len(data)} bytes)")
     return pages
 
 
-def extract_text_from_docx(file_path: str) -> list[dict]:
-    """Extract text from DOCX file."""
-    doc = DocxDocument(file_path)
+def extract_text_from_docx_bytes(data: bytes) -> list[dict]:
+    doc = DocxDocument(io.BytesIO(data))
     full_text = []
     for para in doc.paragraphs:
         cleaned = para.text.strip()
         if cleaned:
             full_text.append(cleaned)
     text = clean_text("\n".join(full_text))
-    logger.info(f"DOCX extracted: {len(text)} chars from {file_path}")
+    logger.info(f"DOCX extracted: {len(text)} chars from bytes")
     return [{"text": text, "page": 1}]
 
 
-def extract_text_from_txt(file_path: str) -> list[dict]:
-    """Extract text from plain text file."""
+def extract_text_from_txt_bytes(data: bytes) -> list[dict]:
     encodings = ["utf-8", "latin-1", "cp1252"]
     for enc in encodings:
         try:
-            with open(file_path, "r", encoding=enc) as f:
-                text = clean_text(f.read())
-            logger.info(f"TXT extracted: {len(text)} chars ({enc}) from {file_path}")
+            text = clean_text(data.decode(enc))
+            logger.info(f"TXT extracted: {len(text)} chars ({enc}) from bytes")
             return [{"text": text, "page": 1}]
         except UnicodeDecodeError:
             continue
     raise ValueError("Could not decode text file with supported encodings.")
 
 
-def extract_text(file_path: str, file_type: str) -> list[dict]:
+def extract_text(file_data: bytes, file_type: str) -> list[dict]:
     """Route to the correct extractor based on file type."""
     extractors = {
-        "pdf": extract_text_from_pdf,
-        "docx": extract_text_from_docx,
-        "txt": extract_text_from_txt,
-        "doc": extract_text_from_docx,
+        "pdf": extract_text_from_pdf_bytes,
+        "docx": extract_text_from_docx_bytes,
+        "txt": extract_text_from_txt_bytes,
+        "doc": extract_text_from_docx_bytes,
     }
     extractor = extractors.get(file_type.lower())
     if not extractor:
         raise ValueError(f"Unsupported file type: {file_type}")
-    return extractor(file_path)
+    return extractor(file_data)
 
 
 # ── Metadata Extraction ──────────────────────────────────────
@@ -269,13 +268,13 @@ def _split_by_size(text: str, chunk_size: int, overlap: int) -> list[str]:
 # ── Full Processing Pipeline ─────────────────────────────────
 
 async def process_document(doc_id: int, user_id: int,
-                           file_path: str, file_type: str):
+                           file_data: bytes, file_type: str):
     """Full pipeline: extract → clean → metadata → chunk → embed.
 
     Args:
         doc_id: Document database ID
         user_id: Owner user ID (for vector store isolation)
-        file_path: Path to the uploaded file
+        file_data: Raw bytes of the uploaded file
         file_type: File extension (pdf, docx, txt)
     """
     from backend.database import (
@@ -287,25 +286,20 @@ async def process_document(doc_id: int, user_id: int,
 
     try:
         await update_document_status(doc_id, "processing")
-        logger.info(f"[doc:{doc_id}] Starting processing: {file_path} ({file_type})")
+        logger.info(f"[doc:{doc_id}] Starting processing ({file_type}, {len(file_data)} bytes)")
 
-        # 1. Extract text
-        pages = extract_text(file_path, file_type)
+        pages = extract_text(file_data, file_type)
         if not pages:
             raise ValueError("No text could be extracted from the document.")
         total_chars = sum(len(p["text"]) for p in pages)
         page_count = len(pages)
         logger.info(f"[doc:{doc_id}] Extracted {page_count} pages, {total_chars} chars total")
 
-        # Save page count
         await update_document_page_count(doc_id, page_count)
 
-        # 2. Extract metadata
         full_text = "\n\n".join(p["text"] for p in pages)
         metadata = extract_metadata(full_text)
 
-        # Prefer the DB document title (admin-set or from filename)
-        # over the auto-extracted title which can be a law number
         db_doc = await get_document(doc_id)
         if db_doc:
             db_title = db_doc.get("title") or ""
@@ -313,25 +307,20 @@ async def process_document(doc_id: int, user_id: int,
             if db_title and len(db_title) > 3:
                 metadata["title"] = db_title
             elif db_orig:
-                # Use filename without extension as title
                 metadata["title"] = re.sub(r'\.[^.]+$', '', db_orig)
 
-        # 3. Chunk
         chunks = chunk_text_by_articles(pages)
         if not chunks:
             raise ValueError("Document produced no usable text chunks.")
         logger.info(f"[doc:{doc_id}] Created {len(chunks)} chunks")
 
-        # 4. Store chunks in ChromaDB (vector search)
         await add_chunks_to_store(doc_id, user_id, chunks, metadata)
         logger.info(f"[doc:{doc_id}] Stored {len(chunks)} embeddings (user_id={user_id})")
 
-        # 5. Store chunks in SQLite FTS (keyword search)
-        await delete_chunks_for_document(doc_id)  # clear any old entries
+        await delete_chunks_for_document(doc_id)
         await insert_chunks(doc_id, user_id, chunks)
         logger.info(f"[doc:{doc_id}] Stored {len(chunks)} chunks in FTS index")
 
-        # 6. Update DB — status='ready'
         await update_document_status(
             doc_id, "ready",
             total_chunks=len(chunks),

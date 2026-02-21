@@ -13,6 +13,6 @@ COPY backend/ backend/
 COPY frontend/ frontend/
 COPY run.py .
 
-RUN mkdir -p /app/uploads /app/data
+RUN mkdir -p /data
 
 CMD ["python", "run.py"]
