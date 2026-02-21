@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Albanian Law AI – Asistent juridik</title>
+    <title>Albanian Law AI — Asistent juridik</title>
+    <meta name="description" content="Asistent juridik me AI për ligjin shqiptare. Bëj pyetje, merr përgjigje me burime.">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
@@ -16,7 +18,7 @@
 
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
-            <a href="/" class="sidebar-logo">
+            <a href="/app" class="sidebar-logo">
                 <span class="icon">&#9878;</span>
                 <span data-i18n="app.name">Albanian Law AI</span>
             </a>
@@ -44,13 +46,12 @@
             <div id="paywallOverlay" class="paywall-overlay" style="display:none;">
                 <div class="card">
                     <h2 id="paywallOverlayTitle">Prova falas ka përfunduar</h2>
-                    <p id="paywallOverlayMessage">Aktivizo abonimin për të vazhduar.</p>
-                    <p class="price">4.99€ / muaj pas provës</p>
+                    <p id="paywallOverlayMessage">Aktivizo abonimin për të vazhduar me Albanian Law AI.</p>
+                    <p class="price">4.99€ / muaj</p>
                     <div class="paywall-buttons">
-                        <button type="button" class="btn btn-primary" id="paywallOverlaySubscribe">Fillo provën falas (1 ditë)</button>
-                        <button type="button" class="btn btn-outline" id="paywallOverlayRestore">Rikthe blerjen</button>
+                        <a href="/pricing" class="btn btn-primary" id="paywallOverlaySubscribe" style="text-decoration:none;">Shiko planet dhe çmimet</a>
                     </div>
-                    <p class="paywall-note">Pagesa përmes Google Play. 4.99€/muaj pas provës falas.</p>
+                    <p class="paywall-note">Provë falas 1-ditore. Anulo kurdo.</p>
                 </div>
             </div>
 
@@ -285,23 +286,8 @@
                     window._canSend = false;
                     document.getElementById('paywallOverlayTitle').textContent = t('paywall.trial_ended_short');
                     document.getElementById('paywallOverlayMessage').textContent = t('paywall.activate_to_continue');
-                    var subscribeBtn = document.getElementById('paywallOverlaySubscribe');
-                    if (subscribeBtn) {
-                        subscribeBtn.onclick = function() {
-                            showToast('Hap aplikacionin mobil për të aktivizuar abonimin përmes Google Play.', 'info');
-                        };
-                    }
-                    var restoreBtn = document.getElementById('paywallOverlayRestore');
-                    if (restoreBtn) {
-                        restoreBtn.onclick = async function() {
-                            try {
-                                var r = await fetch('/api/subscription/restore', { method: 'POST', headers: authHeaders() });
-                                var d = await r.json();
-                                if (d.restored) { showToast('Abonimi u rikthye me sukses!', 'success'); setTimeout(function() { window.location.reload(); }, 1000); }
-                                else showToast(d.message || 'Nuk u gjet asnjë abonim aktiv.', 'warning');
-                            } catch (e) { showToast(e.message || t('error.generic'), 'error'); }
-                        };
-                    }
+                    document.getElementById('paywallOverlayTitle').textContent = 'Prova falas ka përfunduar';
+                    document.getElementById('paywallOverlayMessage').textContent = 'Aktivizo abonimin për të vazhduar me Albanian Law AI.';
                 }
             } catch (e) {
                 if (typeof clearToken === 'function') clearToken();
@@ -318,12 +304,12 @@
                 }).catch(function(){});
             }
             if (typeof clearToken === 'function') clearToken();
-            window.location.href = '/';
+            window.location.href = '/login';
         }
 
         var urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('subscription') === 'success') {
-            window.history.replaceState({}, '', '/');
+            window.history.replaceState({}, '', '/app');
             setTimeout(function() { window.location.reload(); }, 100);
         }
 

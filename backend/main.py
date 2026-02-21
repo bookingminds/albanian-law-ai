@@ -125,8 +125,18 @@ MAX_FILE_SIZE_MB = 50
 # ── Frontend Routes ───────────────────────────────────────────
 
 @app.get("/")
+async def serve_landing():
+    return FileResponse(str(frontend_dir / "landing.html"))
+
+
+@app.get("/app")
 async def serve_chat():
     return FileResponse(str(frontend_dir / "index.html"))
+
+
+@app.get("/pricing")
+async def serve_pricing():
+    return FileResponse(str(frontend_dir / "pricing.html"))
 
 
 @app.get("/admin")
@@ -141,7 +151,6 @@ async def serve_login():
 
 @app.get("/documents")
 async def serve_documents():
-    """Serve the document library page."""
     return FileResponse(str(frontend_dir / "documents.html"))
 
 

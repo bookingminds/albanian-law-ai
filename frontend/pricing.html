@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="sq">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Çmimet — Albanian Law AI</title>
+    <meta name="description" content="Fillo provën falas 1-ditore. Pastaj 4.99€ / muaj për akses të plotë.">
+    <link rel="icon" href="/static/img/logo.png" type="image/png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --navy: #0a0f2c;
+            --navy-light: #1a1f36;
+            --accent: #6c63ff;
+            --accent-glow: rgba(108,99,255,.25);
+            --text-white: #f0f0f5;
+            --text-muted: #9a9ab0;
+            --border-dim: rgba(255,255,255,.08);
+            --surface: rgba(255,255,255,.04);
+            --green: #22c55e;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family:'Inter',sans-serif; background:var(--navy); color:var(--text-white); line-height:1.6; }
+        a { color:var(--accent); text-decoration:none; }
+
+        .nav { position:fixed; top:0; left:0; right:0; z-index:100; padding:16px 32px; display:flex; align-items:center; justify-content:space-between; background:rgba(10,15,44,.85); backdrop-filter:blur(12px); border-bottom:1px solid var(--border-dim); }
+        .nav-logo { display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.1rem; color:var(--text-white); text-decoration:none; }
+        .nav-logo img { width:32px; height:32px; border-radius:8px; }
+        .nav-links { display:flex; gap:24px; align-items:center; }
+        .nav-links a { color:var(--text-muted); font-size:.9rem; font-weight:500; text-decoration:none; }
+        .nav-links a:hover { color:#fff; }
+        .nav-cta { background:var(--accent); color:#fff !important; padding:8px 20px; border-radius:8px; font-weight:600; }
+
+        .page { padding:120px 24px 80px; max-width:960px; margin:0 auto; text-align:center; }
+        .page h1 { font-size:clamp(1.8rem,4vw,2.6rem); font-weight:800; margin-bottom:12px; }
+        .page .subtitle { color:var(--text-muted); font-size:1.05rem; max-width:500px; margin:0 auto 48px; }
+
+        .plans { display:grid; grid-template-columns:1fr 1fr; gap:24px; max-width:720px; margin:0 auto; }
+
+        .plan-card { background:var(--navy-light); border:1px solid var(--border-dim); border-radius:20px; padding:40px 32px; text-align:left; position:relative; transition:transform .2s, border-color .2s; }
+        .plan-card:hover { transform:translateY(-4px); }
+        .plan-card.featured { border-color:var(--accent); }
+        .plan-card.featured::after { content:'Rekomanduar'; position:absolute; top:-12px; left:50%; transform:translateX(-50%); background:var(--accent); color:#fff; font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:1px; padding:4px 16px; border-radius:999px; }
+
+        .plan-name { font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing:1px; color:var(--accent); margin-bottom:12px; }
+        .plan-price { font-size:2.4rem; font-weight:800; margin-bottom:4px; }
+        .plan-price span { font-size:.95rem; font-weight:400; color:var(--text-muted); }
+        .plan-desc { font-size:.88rem; color:var(--text-muted); margin-bottom:24px; }
+
+        .plan-features { list-style:none; margin-bottom:32px; }
+        .plan-features li { padding:8px 0; font-size:.9rem; color:var(--text-muted); display:flex; align-items:center; gap:10px; }
+        .plan-features li .check { color:var(--green); font-weight:700; font-size:1rem; flex-shrink:0; }
+
+        .plan-btn { display:block; width:100%; padding:14px; text-align:center; border-radius:10px; font-weight:600; font-size:.95rem; border:none; cursor:pointer; transition:transform .15s, box-shadow .15s; text-decoration:none; }
+        .plan-btn:hover { text-decoration:none; }
+        .plan-btn-primary { background:var(--accent); color:#fff; }
+        .plan-btn-primary:hover { transform:translateY(-2px); box-shadow:0 6px 24px var(--accent-glow); }
+        .plan-btn-outline { background:transparent; color:var(--text-white); border:1px solid var(--border-dim); }
+        .plan-btn-outline:hover { background:var(--surface); }
+
+        .faq { max-width:640px; margin:80px auto 0; text-align:left; }
+        .faq h2 { text-align:center; font-size:1.4rem; font-weight:700; margin-bottom:32px; }
+        .faq-item { border-bottom:1px solid var(--border-dim); padding:16px 0; }
+        .faq-item h3 { font-size:.95rem; font-weight:600; margin-bottom:6px; }
+        .faq-item p { font-size:.88rem; color:var(--text-muted); }
+
+        .footer { padding:40px 24px; text-align:center; border-top:1px solid var(--border-dim); margin-top:80px; }
+        .footer p { font-size:.82rem; color:var(--text-muted); }
+        .footer a { color:var(--text-muted); margin:0 8px; }
+        .footer a:hover { color:#fff; }
+
+        @media (max-width:640px) {
+            .nav { padding:12px 16px; }
+            .nav-links a:not(.nav-cta) { display:none; }
+            .plans { grid-template-columns:1fr; }
+            .plan-card { padding:28px 24px; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <a href="/" class="nav-logo">
+            <img src="/static/img/logo.png" alt="Logo">
+            Albanian Law AI
+        </a>
+        <div class="nav-links">
+            <a href="/">Faqja kryesore</a>
+            <a href="/login">Hyrje</a>
+            <a href="/login" class="nav-cta">Fillo falas</a>
+        </div>
+    </nav>
+
+    <div class="page">
+        <h1>Zgjidh planin tënd</h1>
+        <p class="subtitle">Fillo me provën falas 1-ditore. Anulo kurdo pa penalitet.</p>
+
+        <div class="plans">
+            <div class="plan-card">
+                <div class="plan-name">Provë falas</div>
+                <div class="plan-price">0€ <span>/ 1 ditë</span></div>
+                <div class="plan-desc">Provo të gjitha mundësitë pa kosto.</div>
+                <ul class="plan-features">
+                    <li><span class="check">&#10003;</span> Pyetje pa limit për 24 orë</li>
+                    <li><span class="check">&#10003;</span> Ngarko deri 20 dokumente</li>
+                    <li><span class="check">&#10003;</span> Përgjigje me burime</li>
+                    <li><span class="check">&#10003;</span> Kërkim i avancuar me AI</li>
+                </ul>
+                <a href="/login" class="plan-btn plan-btn-outline">Fillo provën falas</a>
+            </div>
+            <div class="plan-card featured">
+                <div class="plan-name">Premium</div>
+                <div class="plan-price">4.99€ <span>/ muaj</span></div>
+                <div class="plan-desc">Akses i plotë pa limit kohe.</div>
+                <ul class="plan-features">
+                    <li><span class="check">&#10003;</span> Pyetje pa limit</li>
+                    <li><span class="check">&#10003;</span> Ngarko deri 20 dokumente</li>
+                    <li><span class="check">&#10003;</span> Përgjigje me burime dhe citata</li>
+                    <li><span class="check">&#10003;</span> Kërkim i avancuar me AI</li>
+                    <li><span class="check">&#10003;</span> Privatësi e plotë</li>
+                    <li><span class="check">&#10003;</span> Mbështetje prioritare</li>
+                </ul>
+                <a href="/login" class="plan-btn plan-btn-primary">Fillo me Premium</a>
+            </div>
+        </div>
+
+        <div class="faq">
+            <h2>Pyetje të shpeshta</h2>
+            <div class="faq-item">
+                <h3>Si funksionon prova falas?</h3>
+                <p>Pas regjistrimit, keni 24 orë akses të plotë pa kosto. Nuk kërkohet kartë krediti.</p>
+            </div>
+            <div class="faq-item">
+                <h3>Mund ta anuloj kurdo?</h3>
+                <p>Po, anuloni kurdo pa pyetje. Nuk ka kontratë afatgjatë.</p>
+            </div>
+            <div class="faq-item">
+                <h3>Cilat metoda pagese pranohen?</h3>
+                <p>Pranojmë kartë krediti/debiti (Visa, Mastercard) përmes Stripe. Pagesa është e sigurt.</p>
+            </div>
+            <div class="faq-item">
+                <h3>A janë dokumentet e mia të sigurta?</h3>
+                <p>Po, dokumentet tuaja janë të enkriptuara dhe vetëm ju keni akses. Nuk ndahen me askënd.</p>
+            </div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <p>&copy; 2026 Albanian Law AI. Të gjitha të drejtat e rezervuara.</p>
+        <p style="margin-top:8px;">
+            <a href="/">Faqja kryesore</a>
+            <a href="/login">Hyrje</a>
+            <a href="/app">Bisedë</a>
+        </p>
+    </footer>
+</body>
+</html>
