@@ -74,12 +74,141 @@
         </div>
     </div>
 
+        <!-- Suggested Questions Management -->
+        <div class="card" style="margin-top:1.5rem;">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+                <span>Pyetje të sugjeruara</span>
+                <button class="btn btn-sm btn-primary" onclick="toggleAddSQForm()">+ Shto pyetje</button>
+            </div>
+
+            <div id="sqAddForm" style="display:none; padding:.75rem 0; border-bottom:1px solid var(--border); margin-bottom:1rem;">
+                <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-end;">
+                    <div class="form-group" style="flex:1; min-width:140px; margin-bottom:0;">
+                        <label>Kategoria</label>
+                        <input type="text" id="sqCategory" placeholder="p.sh. E drejta civile" list="sqCategoryList">
+                        <datalist id="sqCategoryList"></datalist>
+                    </div>
+                    <div class="form-group" style="flex:2; min-width:200px; margin-bottom:0;">
+                        <label>Pyetja</label>
+                        <input type="text" id="sqQuestion" placeholder="Shkruaj pyetjen…">
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="addSQ()" style="height:38px;">Ruaj</button>
+                </div>
+            </div>
+
+            <div id="sqContainer">
+                <div class="empty-state" style="padding:1rem;">
+                    <p>Duke ngarkuar…</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="toast-container" id="toastContainer"></div>
 
     <script src="/static/js/i18n.js"></script>
     <script src="/static/js/auth.js"></script>
     <script src="/static/js/admin.js"></script>
     <script>
+        function toggleAddSQForm() {
+            var f = document.getElementById('sqAddForm');
+            f.style.display = f.style.display === 'none' ? 'block' : 'none';
+        }
+
+        async function loadSQ() {
+            var token = getToken();
+            try {
+                var res = await fetch('/api/admin/suggested-questions', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                var data = await res.json();
+                renderSQ(data.questions || []);
+            } catch (e) {
+                document.getElementById('sqContainer').innerHTML = '<p style="color:var(--error);padding:.75rem;">Gabim gjatë ngarkimit.</p>';
+            }
+        }
+
+        function renderSQ(questions) {
+            var el = document.getElementById('sqContainer');
+            if (!questions.length) {
+                el.innerHTML = '<div class="empty-state" style="padding:1rem;"><p>Nuk ka pyetje të sugjeruara.</p></div>';
+                return;
+            }
+            var cats = {};
+            var catList = document.getElementById('sqCategoryList');
+            catList.innerHTML = '';
+            questions.forEach(function(q) {
+                if (!cats[q.category]) cats[q.category] = [];
+                cats[q.category].push(q);
+            });
+            Object.keys(cats).forEach(function(c) {
+                var opt = document.createElement('option');
+                opt.value = c;
+                catList.appendChild(opt);
+            });
+            var html = '';
+            Object.keys(cats).forEach(function(cat) {
+                html += '<div style="margin-bottom:1rem;"><h4 style="font-size:.85rem;color:var(--primary);margin-bottom:.5rem;text-transform:uppercase;letter-spacing:.5px;">' + escSQ(cat) + '</h4>';
+                cats[cat].forEach(function(q) {
+                    var active = q.is_active ? 'Aktive' : 'Joaktive';
+                    var activeColor = q.is_active ? 'var(--success)' : 'var(--text-muted)';
+                    var toggleLabel = q.is_active ? 'Çaktivizo' : 'Aktivizo';
+                    html += '<div style="display:flex;align-items:center;gap:.5rem;padding:.4rem .5rem;border-bottom:1px solid var(--border);font-size:.88rem;">';
+                    html += '<span style="flex:1;">' + escSQ(q.question) + '</span>';
+                    html += '<span style="font-size:.7rem;color:' + activeColor + ';font-weight:600;">' + active + '</span>';
+                    html += '<button class="btn btn-sm" style="font-size:.7rem;padding:.2rem .5rem;border:1px solid var(--border);" onclick="toggleSQ(' + q.id + ',' + (q.is_active ? 'false' : 'true') + ')">' + toggleLabel + '</button>';
+                    html += '<button class="btn btn-sm btn-danger" style="font-size:.7rem;padding:.2rem .4rem;" onclick="deleteSQ(' + q.id + ')">&#128465;</button>';
+                    html += '</div>';
+                });
+                html += '</div>';
+            });
+            el.innerHTML = html;
+        }
+
+        async function addSQ() {
+            var cat = document.getElementById('sqCategory').value.trim();
+            var q = document.getElementById('sqQuestion').value.trim();
+            if (!cat || !q) return;
+            var token = getToken();
+            try {
+                var res = await fetch('/api/admin/suggested-questions', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ category: cat, question: q })
+                });
+                if (!res.ok) throw new Error('Dështoi');
+                document.getElementById('sqQuestion').value = '';
+                loadSQ();
+            } catch (e) { alert(e.message); }
+        }
+
+        async function toggleSQ(id, newState) {
+            var token = getToken();
+            await fetch('/api/admin/suggested-questions/' + id, {
+                method: 'PATCH',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ is_active: newState })
+            });
+            loadSQ();
+        }
+
+        async function deleteSQ(id) {
+            if (!confirm('Fshi pyetjen?')) return;
+            var token = getToken();
+            await fetch('/api/admin/suggested-questions/' + id, {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            loadSQ();
+        }
+
+        function escSQ(s) {
+            if (!s) return '';
+            var d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
         (async function checkAdminAuth() {
             const token = getToken();
             if (!token) {
@@ -100,6 +229,7 @@
                     if (typeof __applyI18n === 'function') __applyI18n();
                     return;
                 }
+                loadSQ();
             } catch (e) {
                 redirectToLogin();
             }

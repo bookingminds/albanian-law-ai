@@ -201,6 +201,49 @@ async def init_db():
         )
         await db.commit()
 
+        # ── Suggested Questions ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS suggested_questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                question TEXT NOT NULL,
+                sort_order INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sq_active ON suggested_questions(is_active)"
+        )
+        await db.commit()
+
+        # Seed default questions if table is empty
+        cursor = await db.execute("SELECT COUNT(*) FROM suggested_questions")
+        count_row = await cursor.fetchone()
+        if count_row[0] == 0:
+            seed_questions = [
+                ("E drejta civile", "Cilat janë afatet e parashkrimit sipas Kodit Civil?", 1),
+                ("E drejta civile", "Si zgjidhet një mosmarrëveshje pronësie?", 2),
+                ("E drejta civile", "Cilat janë kushtet për lidhjen e një kontrate?", 3),
+                ("E drejta penale", "Cilat janë dënimet për vjedhje sipas Kodit Penal?", 1),
+                ("E drejta penale", "Kur konsiderohet një vepër si kundravajtje penale?", 2),
+                ("E drejta penale", "Si funksionon procedimi penal në Shqipëri?", 3),
+                ("E drejta e punës", "Cilat janë të drejtat e punëmarrësit sipas Kodit të Punës?", 1),
+                ("E drejta e punës", "Si llogaritet kompensimi për largim nga puna?", 2),
+                ("E drejta e punës", "Sa ditë leje vjetore ka një punëmarrës?", 3),
+                ("E drejta familjare", "Si bëhet ndarja e pasurisë pas divorcit?", 1),
+                ("E drejta familjare", "Cilat janë kushtet për birësimin e fëmijëve?", 2),
+                ("E drejta familjare", "Si përcaktohet kujdestaria e fëmijëve?", 3),
+                ("Procedura administrative", "Si ankimohet një vendim administrativ?", 1),
+                ("Procedura administrative", "Cilat janë afatet për ankimin administrativ?", 2),
+                ("Procedura administrative", "Si funksionon gjykata administrative?", 3),
+            ]
+            await db.executemany(
+                "INSERT INTO suggested_questions (category, question, sort_order) VALUES (?, ?, ?)",
+                seed_questions,
+            )
+            await db.commit()
+
 
 # ── Document CRUD ──────────────────────────────────────────────
 
@@ -791,3 +834,60 @@ async def get_active_subscription(user_id: int):
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+
+# ── Suggested Questions CRUD ──────────────────────────────────
+
+async def get_active_suggested_questions():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT id, category, question FROM suggested_questions WHERE is_active = 1 ORDER BY category, sort_order"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_all_suggested_questions():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM suggested_questions ORDER BY category, sort_order"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def create_suggested_question(category: str, question: str, sort_order: int = 0):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO suggested_questions (category, question, sort_order) VALUES (?, ?, ?)",
+            (category, question, sort_order),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def update_suggested_question(qid: int, category: str = None, question: str = None,
+                                     is_active: bool = None, sort_order: int = None):
+    fields, values = [], []
+    if category is not None:
+        fields.append("category = ?"); values.append(category)
+    if question is not None:
+        fields.append("question = ?"); values.append(question)
+    if is_active is not None:
+        fields.append("is_active = ?"); values.append(1 if is_active else 0)
+    if sort_order is not None:
+        fields.append("sort_order = ?"); values.append(sort_order)
+    if not fields:
+        return
+    values.append(qid)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE suggested_questions SET {', '.join(fields)} WHERE id = ?", values)
+        await db.commit()
+
+
+async def delete_suggested_question(qid: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM suggested_questions WHERE id = ?", (qid,))
+        await db.commit()

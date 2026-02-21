@@ -93,6 +93,8 @@
                             <p class="welcome-note" data-i18n="chat.welcome_note">Përgjigjem në bazë të ligjeve dhe rregulloreve në sistem. Çdo përgjigje shoqërohet me burime dhe referenca.</p>
                         </div>
                     </div>
+                    <!-- Suggested questions (loaded dynamically, hidden after first message) -->
+                    <div id="suggestedQuestionsSection" class="sq-section" style="display:none;"></div>
                 </div>
                 <div class="chat-input-area">
                     <div id="suggestPanel" class="suggest-panel" style="display:none;"></div>
@@ -335,6 +337,64 @@
             document.getElementById('sidebar').classList.remove('open');
             document.getElementById('sidebarOverlay').classList.remove('active');
         }
+
+        // ── Suggested Questions ──────────────────────────
+        async function loadSuggestedQuestions() {
+            try {
+                var res = await fetch('/api/suggested-questions');
+                if (!res.ok) return;
+                var data = await res.json();
+                renderSuggestedQuestions(data.categories || []);
+            } catch (e) { /* silent */ }
+        }
+
+        function renderSuggestedQuestions(categories) {
+            var section = document.getElementById('suggestedQuestionsSection');
+            if (!categories.length) { section.style.display = 'none'; return; }
+
+            var html = '<div class="sq-header">Pyetje të sugjeruara</div><div class="sq-categories">';
+            categories.forEach(function(cat) {
+                html += '<div class="sq-category">';
+                html += '<div class="sq-cat-name">' + escHTML(cat.name) + '</div>';
+                html += '<div class="sq-chips">';
+                cat.questions.forEach(function(q) {
+                    html += '<button type="button" class="sq-chip" onclick="useSuggestedQuestion(this)" data-question="' + escAttr(q.question) + '">' + escHTML(q.question) + '</button>';
+                });
+                html += '</div></div>';
+            });
+            html += '</div>';
+            section.innerHTML = html;
+            section.style.display = 'block';
+        }
+
+        function useSuggestedQuestion(btn) {
+            var question = btn.getAttribute('data-question');
+            if (!question) return;
+            var input = document.getElementById('chatInput');
+            if (input) {
+                input.value = question;
+                if (typeof autoResize === 'function') autoResize(input);
+            }
+            hideSuggestedQuestions();
+            if (typeof sendMessage === 'function') sendMessage();
+        }
+
+        function hideSuggestedQuestions() {
+            var section = document.getElementById('suggestedQuestionsSection');
+            if (section) section.style.display = 'none';
+        }
+
+        function escHTML(s) {
+            if (!s) return '';
+            var d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+        function escAttr(s) {
+            return escHTML(s).replace(/"/g, '&quot;');
+        }
+
+        loadSuggestedQuestions();
     </script>
 </body>
 </html>

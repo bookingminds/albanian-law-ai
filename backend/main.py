@@ -49,6 +49,10 @@ from backend.auth import (
     get_current_user, get_current_user_optional, require_admin, require_subscription,
 )
 from backend.database import get_active_subscription, upsert_subscription
+from backend.database import (
+    get_active_suggested_questions, get_all_suggested_questions,
+    create_suggested_question, update_suggested_question, delete_suggested_question,
+)
 import aiosqlite
 from backend.database import DB_PATH
 
@@ -1275,6 +1279,58 @@ async def suggest_questions(
 
 
 # ── Health Check ──────────────────────────────────────────────
+
+# ── Suggested Questions API ────────────────────────────────────
+
+@app.get("/api/suggested-questions")
+async def get_suggested_questions_api():
+    """Public: return active questions grouped by category."""
+    questions = await get_active_suggested_questions()
+    grouped = {}
+    for q in questions:
+        cat = q["category"]
+        if cat not in grouped:
+            grouped[cat] = []
+        grouped[cat].append({"id": q["id"], "question": q["question"]})
+    return {"categories": [{"name": k, "questions": v} for k, v in grouped.items()]}
+
+
+@app.get("/api/admin/suggested-questions")
+async def admin_list_suggested_questions(user: dict = Depends(require_admin)):
+    """Admin: list all questions (active + inactive)."""
+    return {"questions": await get_all_suggested_questions()}
+
+
+@app.post("/api/admin/suggested-questions")
+async def admin_create_suggested_question(request: Request, user: dict = Depends(require_admin)):
+    body = await request.json()
+    category = body.get("category", "").strip()
+    question = body.get("question", "").strip()
+    sort_order = body.get("sort_order", 0)
+    if not category or not question:
+        raise HTTPException(status_code=400, detail="Category and question are required.")
+    qid = await create_suggested_question(category, question, sort_order)
+    return {"ok": True, "id": qid}
+
+
+@app.patch("/api/admin/suggested-questions/{qid}")
+async def admin_update_suggested_question(qid: int, request: Request, user: dict = Depends(require_admin)):
+    body = await request.json()
+    await update_suggested_question(
+        qid,
+        category=body.get("category"),
+        question=body.get("question"),
+        is_active=body.get("is_active"),
+        sort_order=body.get("sort_order"),
+    )
+    return {"ok": True}
+
+
+@app.delete("/api/admin/suggested-questions/{qid}")
+async def admin_delete_suggested_question(qid: int, user: dict = Depends(require_admin)):
+    await delete_suggested_question(qid)
+    return {"ok": True}
+
 
 @app.post("/api/admin/promote")
 async def promote_to_admin(request: Request):

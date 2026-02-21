@@ -2004,6 +2004,112 @@ button, a, input, textarea, select {
     to { opacity: 1; transform: translateY(0); }
 }
 
+/* ── Suggested Questions ─────────────────────────────── */
+
+.sq-section {
+    padding: .5rem 0;
+    animation: fadeIn .4s ease;
+}
+
+.sq-header {
+    font-size: .82rem;
+    font-weight: 700;
+    color: var(--primary);
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    margin-bottom: .75rem;
+    padding-left: .15rem;
+}
+
+.sq-categories {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.sq-category {
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+}
+
+.sq-cat-name {
+    font-size: .72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    padding-left: .1rem;
+}
+
+.sq-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
+}
+
+.sq-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: .5rem .85rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--text);
+    font-size: .82rem;
+    font-family: inherit;
+    line-height: 1.35;
+    cursor: pointer;
+    transition: all .15s;
+    text-align: left;
+    white-space: normal;
+    word-break: break-word;
+}
+
+.sq-chip:hover {
+    border-color: var(--primary);
+    background: var(--primary-lighter);
+    color: var(--primary);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(26, 54, 93, .1);
+}
+
+.sq-chip:active {
+    transform: scale(.97);
+}
+
+/* Mobile: horizontal scroll per category */
+@media (max-width: 768px) {
+    .sq-chips {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        padding-bottom: 4px;
+    }
+    .sq-chips::-webkit-scrollbar { display: none; }
+    .sq-chip {
+        flex-shrink: 0;
+        max-width: 280px;
+        font-size: .78rem;
+        padding: .45rem .7rem;
+    }
+    .sq-header { font-size: .76rem; margin-bottom: .5rem; }
+    .sq-cat-name { font-size: .66rem; }
+    .sq-categories { gap: .75rem; }
+}
+
+@media (max-width: 480px) {
+    .sq-chip {
+        max-width: 240px;
+        font-size: .74rem;
+        padding: .4rem .6rem;
+        border-radius: 16px;
+    }
+    .sq-header { font-size: .7rem; }
+    .sq-cat-name { font-size: .62rem; }
+}
+
 /* ── Toast types ──────────────────────────────────────── */
 
 .toast-info { border-left: 3px solid var(--primary); }

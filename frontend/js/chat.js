@@ -263,6 +263,7 @@ async function sendMessage() {
     sendBtn.disabled = true;
 
     hideSuggestPanel();
+    if (typeof hideSuggestedQuestions === 'function') hideSuggestedQuestions();
 
     addMessage('user', question);
     input.value = '';
