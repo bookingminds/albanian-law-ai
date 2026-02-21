@@ -209,7 +209,8 @@ async def init_db():
                 question TEXT NOT NULL,
                 sort_order INTEGER DEFAULT 0,
                 is_active INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(category, question)
             )
         """)
         await db.execute(
@@ -217,29 +218,69 @@ async def init_db():
         )
         await db.commit()
 
-        # Seed default questions if table is empty
+        # Seed 50 default questions if table is empty
         cursor = await db.execute("SELECT COUNT(*) FROM suggested_questions")
         count_row = await cursor.fetchone()
         if count_row[0] == 0:
             seed_questions = [
-                ("E drejta civile", "Cilat janë afatet e parashkrimit sipas Kodit Civil?", 1),
-                ("E drejta civile", "Si zgjidhet një mosmarrëveshje pronësie?", 2),
-                ("E drejta civile", "Cilat janë kushtet për lidhjen e një kontrate?", 3),
-                ("E drejta penale", "Cilat janë dënimet për vjedhje sipas Kodit Penal?", 1),
-                ("E drejta penale", "Kur konsiderohet një vepër si kundravajtje penale?", 2),
-                ("E drejta penale", "Si funksionon procedimi penal në Shqipëri?", 3),
-                ("E drejta e punës", "Cilat janë të drejtat e punëmarrësit sipas Kodit të Punës?", 1),
-                ("E drejta e punës", "Si llogaritet kompensimi për largim nga puna?", 2),
-                ("E drejta e punës", "Sa ditë leje vjetore ka një punëmarrës?", 3),
-                ("E drejta familjare", "Si bëhet ndarja e pasurisë pas divorcit?", 1),
-                ("E drejta familjare", "Cilat janë kushtet për birësimin e fëmijëve?", 2),
-                ("E drejta familjare", "Si përcaktohet kujdestaria e fëmijëve?", 3),
-                ("Procedura administrative", "Si ankimohet një vendim administrativ?", 1),
-                ("Procedura administrative", "Cilat janë afatet për ankimin administrativ?", 2),
-                ("Procedura administrative", "Si funksionon gjykata administrative?", 3),
+                # Punësim (10)
+                ("Punësim", "Sa ditë pushim vjetor kam sipas ligjit në Shqipëri?", 1),
+                ("Punësim", "A mund të më pushojë punëdhënësi pa paralajmërim?", 2),
+                ("Punësim", "Sa është periudha e njoftimit për largim nga puna?", 3),
+                ("Punësim", "Si paguhet puna jashtë orarit?", 4),
+                ("Punësim", "A kam të drejtë për leje lindjeje dhe sa zgjat?", 5),
+                ("Punësim", "A kam të drejtë për ditë pushimi mjekësore të paguara?", 6),
+                ("Punësim", "Çfarë përfshin kontrata e punës sipas ligjit?", 7),
+                ("Punësim", "A lejohet puna me dy kontrata në të njëjtën kohë?", 8),
+                ("Punësim", "Si llogaritet paga minimale në Shqipëri?", 9),
+                ("Punësim", "Çfarë ndodh nëse nuk më paguajnë rrogën në kohë?", 10),
+                # Tatime & Biznes (10)
+                ("Tatime & Biznes", "Sa është tatimi mbi fitimin për bizneset e vogla në Shqipëri?", 1),
+                ("Tatime & Biznes", "Si regjistrohet një biznes i ri?", 2),
+                ("Tatime & Biznes", "Cilat janë detyrimet tatimore për një freelancer?", 3),
+                ("Tatime & Biznes", "Çfarë është TVSH dhe kur duhet të regjistrohem për të?", 4),
+                ("Tatime & Biznes", "Si deklarohet fitimi vjetor i biznesit?", 5),
+                ("Tatime & Biznes", "Cilat janë gjobat për mosdeklarim tatimor?", 6),
+                ("Tatime & Biznes", "Si mbyllet një biznes sipas ligjit?", 7),
+                ("Tatime & Biznes", "Çfarë detyrimesh ka një person i vetëpunësuar?", 8),
+                ("Tatime & Biznes", "A duhet të paguaj sigurime shoqërore si biznes?", 9),
+                ("Tatime & Biznes", "Si bëhet ndryshimi i statusit të biznesit?", 10),
+                # Familje (10)
+                ("Familje", "Si bëhet procedura e divorcit në Shqipëri?", 1),
+                ("Familje", "Si ndahet pasuria pas divorcit?", 2),
+                ("Familje", "Si përcaktohet kujdestaria e fëmijëve?", 3),
+                ("Familje", "Sa është detyrimi për ushqim (alimentacion)?", 4),
+                ("Familje", "Si bëhet njohja e atësisë?", 5),
+                ("Familje", "A mund të ndryshoj mbiemrin pas martese?", 6),
+                ("Familje", "Si bëhet birësimi i një fëmije?", 7),
+                ("Familje", "Cilat janë të drejtat e bashkëshortëve në martesë?", 8),
+                ("Familje", "Si bëhet ndarja e pasurisë së përbashkët?", 9),
+                ("Familje", "A lejohet martesa me dy mbiemra në Shqipëri?", 10),
+                # Pronë & Pasuri (10)
+                ("Pronë & Pasuri", "Si regjistrohet një pronë në Shqipëri?", 1),
+                ("Pronë & Pasuri", "Çfarë dokumentesh duhen për shitje prone?", 2),
+                ("Pronë & Pasuri", "Si bëhet kalimi i pronësisë së një apartamenti?", 3),
+                ("Pronë & Pasuri", "Si zgjidhen konfliktet e pronësisë?", 4),
+                ("Pronë & Pasuri", "Çfarë është hipoteka dhe si vendoset mbi një pronë?", 5),
+                ("Pronë & Pasuri", "A mund të shitet një pronë pa certifikatë pronësie?", 6),
+                ("Pronë & Pasuri", "Si bëhet kontrata e qirasë dhe çfarë përfshin?", 7),
+                ("Pronë & Pasuri", "Çfarë të drejtash ka qiramarrësi sipas ligjit?", 8),
+                ("Pronë & Pasuri", "Si llogaritet taksa e pronës?", 9),
+                ("Pronë & Pasuri", "Si bëhet trashëgimia e një prone?", 10),
+                # Penale (10)
+                ("Penale", "Çfarë konsiderohet vepër penale sipas ligjit shqiptar?", 1),
+                ("Penale", "Cilat janë dënimet për mashtrim?", 2),
+                ("Penale", "Si bëhet një kallëzim penal?", 3),
+                ("Penale", "Çfarë të drejtash ka një person i arrestuar?", 4),
+                ("Penale", "Sa zgjat paraburgimi sipas ligjit?", 5),
+                ("Penale", 'Çfarë është masa e sigurisë "arrest në shtëpi"?', 6),
+                ("Penale", "Si bëhet mbrojtja nga një avokat?", 7),
+                ("Penale", "Cilat janë dënimet për drejtim pa leje drejtimi?", 8),
+                ("Penale", "Çfarë ndodh në rast dhune në familje?", 9),
+                ("Penale", "Si bëhet ankimi ndaj një vendimi penal?", 10),
             ]
             await db.executemany(
-                "INSERT INTO suggested_questions (category, question, sort_order) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO suggested_questions (category, question, sort_order) VALUES (?, ?, ?)",
                 seed_questions,
             )
             await db.commit()

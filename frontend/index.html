@@ -339,6 +339,8 @@
         }
 
         // ── Suggested Questions ──────────────────────────
+        var SQ_INITIAL_SHOW = 3;
+
         async function loadSuggestedQuestions() {
             try {
                 var res = await fetch('/api/suggested-questions');
@@ -353,18 +355,43 @@
             if (!categories.length) { section.style.display = 'none'; return; }
 
             var html = '<div class="sq-header">Pyetje të sugjeruara</div><div class="sq-categories">';
-            categories.forEach(function(cat) {
+            categories.forEach(function(cat, ci) {
+                var total = cat.questions.length;
+                var hasMore = total > SQ_INITIAL_SHOW;
                 html += '<div class="sq-category">';
                 html += '<div class="sq-cat-name">' + escHTML(cat.name) + '</div>';
-                html += '<div class="sq-chips">';
-                cat.questions.forEach(function(q) {
-                    html += '<button type="button" class="sq-chip" onclick="useSuggestedQuestion(this)" data-question="' + escAttr(q.question) + '">' + escHTML(q.question) + '</button>';
+                html += '<div class="sq-chips" id="sqChips_' + ci + '">';
+                cat.questions.forEach(function(q, qi) {
+                    var hidden = (hasMore && qi >= SQ_INITIAL_SHOW) ? ' sq-chip-hidden' : '';
+                    html += '<button type="button" class="sq-chip' + hidden + '" onclick="useSuggestedQuestion(this)" data-question="' + escAttr(q.question) + '">' + escHTML(q.question) + '</button>';
                 });
-                html += '</div></div>';
+                html += '</div>';
+                if (hasMore) {
+                    html += '<button type="button" class="sq-expand-btn" id="sqExpand_' + ci + '" onclick="toggleSQCategory(' + ci + ',' + total + ')">';
+                    html += 'Shiko më shumë (' + (total - SQ_INITIAL_SHOW) + ')</button>';
+                }
+                html += '</div>';
             });
             html += '</div>';
             section.innerHTML = html;
             section.style.display = 'block';
+        }
+
+        function toggleSQCategory(ci, total) {
+            var chips = document.getElementById('sqChips_' + ci);
+            var btn = document.getElementById('sqExpand_' + ci);
+            if (!chips || !btn) return;
+            var hidden = chips.querySelectorAll('.sq-chip-hidden');
+            if (hidden.length > 0) {
+                hidden.forEach(function(el) { el.classList.remove('sq-chip-hidden'); });
+                btn.textContent = 'Shfaq më pak';
+            } else {
+                var all = chips.querySelectorAll('.sq-chip');
+                for (var i = SQ_INITIAL_SHOW; i < all.length; i++) {
+                    all[i].classList.add('sq-chip-hidden');
+                }
+                btn.textContent = 'Shiko më shumë (' + (total - SQ_INITIAL_SHOW) + ')';
+            }
         }
 
         function useSuggestedQuestion(btn) {
