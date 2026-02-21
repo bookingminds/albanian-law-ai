@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dokumentet e mia — Albanian Law AI</title>
+    <title>Menaxhimi i dokumenteve — Albanian Law AI</title>
     <link rel="icon" href="/static/img/logo.png" type="image/png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -40,7 +40,7 @@
         <a href="/" class="back-link">&#8592; Kthehu te biseda</a>
 
         <div class="doc-lib-header">
-            <h1>&#128196; Dokumentet e mia</h1>
+            <h1>&#128196; Menaxhimi i dokumenteve</h1>
             <div class="doc-lib-actions">
                 <button type="button" class="btn btn-primary" onclick="document.getElementById('docUpload').click()">
                     &#128206; Ngarko dokument
@@ -93,7 +93,7 @@
         function renderDocs(docs) {
             const el = document.getElementById('docList');
             if (!docs.length) {
-                el.innerHTML = '<div class="doc-empty"><div class="icon">&#128196;</div><p>Nuk keni dokumente ende.<br>Klikoni "Ngarko dokument" për të filluar.</p></div>';
+                el.innerHTML = '<div class="doc-empty"><div class="icon">&#128196;</div><p>Nuk ka dokumente ende.<br>Klikoni "Ngarko dokument" për të shtuar ligje në sistem.</p></div>';
                 return;
             }
             el.innerHTML = docs.map(d => {

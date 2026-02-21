@@ -56,27 +56,27 @@
             </div>
 
             <div class="chat-content">
-                <!-- Document toolbar: filter dropdown + upload -->
+                <!-- Document toolbar: filter dropdown + upload (upload only visible to admin) -->
                 <div class="doc-toolbar" id="docToolbar" style="display:none;">
                     <select id="docFilter" onchange="onDocFilterChange()">
                         <option value="">Të gjitha dokumentet</option>
                     </select>
                     <span class="doc-status" id="docStatusIndicator"></span>
-                    <button type="button" class="btn-upload-mini" onclick="document.getElementById('fileUploadInput').click()">&#128206; Ngarko</button>
-                    <a href="/documents" class="btn-upload-mini" style="background:transparent; color:var(--primary); border-color:var(--border); text-decoration:none; display:inline-flex; align-items:center;">&#128196; Libraria</a>
-                    <button type="button" class="btn-debug-toggle" id="debugToggle" onclick="toggleDebugMode()" title="Debug mode OFF">&#128736;</button>
+                    <button type="button" class="btn-upload-mini admin-only" id="btnUpload" style="display:none;" onclick="document.getElementById('fileUploadInput').click()">&#128206; Ngarko</button>
+                    <a href="/documents" class="btn-upload-mini admin-only" id="linkLibrary" style="display:none;">&#128196; Libraria</a>
+                    <button type="button" class="btn-debug-toggle admin-only" id="debugToggle" style="display:none;" onclick="toggleDebugMode()" title="Debug mode OFF">&#128736;</button>
                     <input type="file" id="fileUploadInput" class="hidden-file-input" accept=".pdf,.docx,.doc,.txt" onchange="handleFileUpload(this)">
                 </div>
 
-                <!-- Document management panel (slides from right) -->
-                <div class="doc-panel" id="docPanel">
+                <!-- Document management panel (admin only) -->
+                <div class="doc-panel admin-only" id="docPanel" style="display:none;">
                     <div class="doc-panel-header">
-                        <span>Dokumentet e mia</span>
+                        <span>Menaxhimi i dokumenteve</span>
                         <button type="button" class="btn-close-panel" onclick="toggleDocPanel()">&times;</button>
                     </div>
                     <div class="doc-panel-body" id="docPanelBody">
                         <div class="empty-state" style="padding:1.5rem;">
-                            <p style="font-size:.85rem;">Nuk keni dokumente ende.</p>
+                            <p style="font-size:.85rem;">Nuk ka dokumente ende.</p>
                         </div>
                     </div>
                 </div>
@@ -85,8 +85,8 @@
                     <div class="message message-assistant">
                         <div class="message-bubble welcome-bubble">
                             <p><strong data-i18n="chat.welcome_title">Mirë se vini në Albanian Law AI!</strong></p>
-                            <p data-i18n="chat.welcome_body">Mund t'i përgjigjem pyetjeve bazuar në dokumentet juridike të ngarkuara. Më pyet çdo gjë për ligjet, rregulloret ose procedurat juridike shqiptare.</p>
-                            <p class="welcome-note" data-i18n="chat.welcome_note">Përgjigjem vetëm në bazë të dokumenteve të ngarkuara. Nëse nuk kam informacion të mjaftueshëm, do ta them.</p>
+                            <p data-i18n="chat.welcome_body">Mund t'i përgjigjem pyetjeve bazuar në legjislacionin shqiptar. Më pyet çdo gjë për ligjet, rregulloret ose procedurat juridike.</p>
+                            <p class="welcome-note" data-i18n="chat.welcome_note">Përgjigjem në bazë të ligjeve dhe rregulloreve në sistem. Çdo përgjigje shoqërohet me burime dhe referenca.</p>
                         </div>
                     </div>
                 </div>
@@ -96,7 +96,7 @@
                         <textarea id="chatInput" rows="1" onkeydown="handleKeyDown(event)" oninput="autoResize(this); onInputChange(this);" placeholder="Shkruaj pyetjen tënde për ligjet shqiptare…" title=""></textarea>
                         <button class="btn btn-primary btn-send" onclick="sendMessage()" id="sendBtn" title="Dërgo">&#10148;</button>
                     </div>
-                    <p class="chat-disclaimer" data-i18n="chat.disclaimer">Përgjigjet bazohen vetëm në dokumentet e ngarkuara. Kontrollo gjithmonë me burime zyrtare.</p>
+                    <p class="chat-disclaimer" data-i18n="chat.disclaimer">Përgjigjet bazohen në legjislacionin në sistem. Kontrollo gjithmonë me burime zyrtare.</p>
                 </div>
             </div>
         </main>
@@ -239,7 +239,17 @@
                 // Store admin flag globally for chat.js to use
                 window._isAdmin = !!data.user.is_admin;
 
-                if (data.user.is_admin) document.getElementById('linkAdmin').style.display = 'block';
+                if (data.user.is_admin) {
+                    document.getElementById('linkAdmin').style.display = 'block';
+                    var btnUpload = document.getElementById('btnUpload');
+                    if (btnUpload) btnUpload.style.display = '';
+                    var linkLib = document.getElementById('linkLibrary');
+                    if (linkLib) linkLib.style.display = 'inline-flex';
+                    var dbgToggle = document.getElementById('debugToggle');
+                    if (dbgToggle) dbgToggle.style.display = '';
+                    var docPanel = document.getElementById('docPanel');
+                    if (docPanel) docPanel.style.display = '';
+                }
 
                 var hasSubscription = data.subscription && data.subscription.status;
                 var inTrial = data.trial && data.trial.in_trial;
