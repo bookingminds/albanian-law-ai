@@ -1548,6 +1548,26 @@ async def debug_store_stats(user: dict = Depends(require_admin)):
     }
 
 
+@app.get("/api/debug/db-chunks")
+async def debug_db_chunks(user: dict = Depends(require_admin)):
+    """Check how many chunks exist in PostgreSQL and test FTS."""
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        total = await conn.fetchval("SELECT COUNT(*) FROM document_chunks")
+        by_doc = await conn.fetch(
+            """SELECT document_id, COUNT(*) as cnt
+               FROM document_chunks GROUP BY document_id ORDER BY document_id"""
+        )
+        sample = await conn.fetch(
+            "SELECT id, document_id, chunk_index, LENGTH(content) as len FROM document_chunks LIMIT 5"
+        )
+    return {
+        "total_chunks_in_db": total,
+        "chunks_by_document": [dict(r) for r in by_doc],
+        "sample_chunks": [dict(r) for r in sample],
+    }
+
+
 @app.post("/api/debug/reprocess/{doc_id}")
 async def debug_reprocess(doc_id: int, user: dict = Depends(require_admin)):
     """Re-process a document (delete old chunks from both stores). Admin-only."""
