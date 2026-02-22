@@ -230,7 +230,7 @@ async def register(data: RegisterRequest, request: Request):
         if existing:
             raise HTTPException(status_code=409, detail="Ky email është tashmë i regjistruar.")
         count = await get_users_count()
-        is_admin = (
+        is_admin = bool(
             count == 0
             or (settings.ADMIN_EMAIL and email == settings.ADMIN_EMAIL.strip().lower())
         )
@@ -293,7 +293,7 @@ async def login(data: LoginRequest, request: Request):
                         await link_supabase_uid(user["id"], sb_uid)
                     else:
                         count = await get_users_count()
-                        is_admin = (count == 0 or (settings.ADMIN_EMAIL and email == settings.ADMIN_EMAIL.strip().lower()))
+                        is_admin = bool(count == 0 or (settings.ADMIN_EMAIL and email == settings.ADMIN_EMAIL.strip().lower()))
                         trial_ends_at = (datetime.utcnow() + timedelta(days=settings.TRIAL_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
                         user_id = await create_user_from_supabase(
                             email, supabase_uid=sb_uid, is_admin=is_admin,
