@@ -54,7 +54,11 @@ from backend.database import (
     create_suggested_question, update_suggested_question, delete_suggested_question,
 )
 from backend.database import _get_pool
-from backend.file_storage import upload_file as storage_upload, download_file as storage_download, delete_file as storage_delete, storage_path_for_doc, check_storage_health
+from backend.file_storage import (
+    upload_file as storage_upload, download_file as storage_download,
+    delete_file as storage_delete, storage_path_for_doc,
+    check_storage_health, list_bucket_files,
+)
 
 
 def _resolve_storage_path(doc: dict) -> str:
@@ -822,6 +826,84 @@ async def remove_document(doc_id: int, user: dict = Depends(require_admin)):
     await storage_delete(spath)
     await delete_document(doc_id)
     return {"message": "Document deleted successfully."}
+
+
+# ── Sync from Storage ────────────────────────────────────────
+
+@app.post("/api/admin/sync-storage")
+async def sync_from_storage(user: dict = Depends(require_admin)):
+    """Scan Supabase Storage bucket and import files missing from the DB.
+
+    For each file found in the bucket that has no matching row in `documents`,
+    insert a metadata row and kick off background processing (extract, chunk, embed).
+    """
+    bucket_files = await list_bucket_files()
+    if not bucket_files:
+        return {"synced": 0, "message": "Nuk u gjetën skedarë në storage."}
+
+    existing_docs = await get_all_documents()
+    known_paths = set()
+    known_filenames = set()
+    for d in existing_docs:
+        if d.get("storage_path"):
+            known_paths.add(d["storage_path"])
+        if d.get("filename"):
+            known_filenames.add(d["filename"])
+        if d.get("original_filename"):
+            known_filenames.add(d["original_filename"])
+
+    allowed_extensions = {"pdf", "docx", "doc", "txt"}
+    synced = 0
+    errors = []
+
+    for bf in bucket_files:
+        spath = bf.get("full_path", bf.get("name", ""))
+        fname = spath.rsplit("/", 1)[-1] if "/" in spath else spath
+        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+
+        if ext not in allowed_extensions:
+            continue
+        if spath in known_paths or fname in known_filenames:
+            continue
+
+        file_size = bf.get("metadata", {}).get("size", 0) if isinstance(bf.get("metadata"), dict) else 0
+        title = fname.rsplit(".", 1)[0] if "." in fname else fname
+
+        try:
+            doc_id = await create_document(
+                user_id=user["id"],
+                filename=fname,
+                original_filename=fname,
+                file_type=ext,
+                file_size=file_size,
+                title=title,
+                storage_bucket="Ligje",
+                storage_path=spath,
+            )
+            synced += 1
+
+            try:
+                file_bytes = await storage_download(spath)
+                asyncio.create_task(
+                    _process_in_background(doc_id, user["id"], file_bytes, ext)
+                )
+            except Exception as dl_err:
+                logger.warning(f"Sync: downloaded failed for {spath}: {dl_err}")
+                errors.append(f"{fname}: download failed")
+
+        except Exception as ins_err:
+            logger.warning(f"Sync: insert failed for {spath}: {ins_err}")
+            errors.append(f"{fname}: {str(ins_err)[:100]}")
+
+    result = {
+        "synced": synced,
+        "total_in_bucket": len(bucket_files),
+        "already_known": len(bucket_files) - synced - len(errors),
+        "message": f"U sinkronizuan {synced} dokumente të reja.",
+    }
+    if errors:
+        result["errors"] = errors
+    return result
 
 
 # ── Chat API ──────────────────────────────────────────────────

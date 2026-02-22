@@ -60,10 +60,14 @@
         </div>
 
         <div class="card">
-            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem;">
                 <span data-i18n="admin.documents_list">Dokumentet e ngarkuara</span>
-                <button class="btn btn-sm btn-primary" onclick="loadDocuments()" data-i18n="admin.refresh">Rifresko</button>
+                <div style="display:flex; gap:.5rem;">
+                    <button class="btn btn-sm" id="syncBtn" onclick="syncFromStorage()" style="border:1px solid var(--primary); color:var(--primary); background:transparent;">&#128260; Sinkronizo nga Storage</button>
+                    <button class="btn btn-sm btn-primary" onclick="loadDocuments()">&#8635; Rifresko</button>
+                </div>
             </div>
+            <div id="syncStatus" style="display:none; padding:.5rem .75rem; font-size:.85rem; border-bottom:1px solid var(--border);"></div>
 
             <div id="documentsContainer">
                 <div class="empty-state">
@@ -207,6 +211,46 @@
             var d = document.createElement('div');
             d.textContent = s;
             return d.innerHTML;
+        }
+
+        async function syncFromStorage() {
+            var btn = document.getElementById('syncBtn');
+            var statusEl = document.getElementById('syncStatus');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Sinkronizim...';
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = '<span style="color:var(--primary);">Duke skanuar bucket-in "Ligje"...</span>';
+            try {
+                var token = getToken();
+                var res = await fetch('/api/admin/sync-storage', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                if (res.status === 401) { redirectToLogin(); return; }
+                if (!res.ok) {
+                    var err = await res.json();
+                    throw new Error(err.detail || 'Sync failed');
+                }
+                var data = await res.json();
+                var msg = data.message || ('U sinkronizuan ' + data.synced + ' dokumente.');
+                if (data.synced > 0) {
+                    statusEl.innerHTML = '<span style="color:var(--success);">&#10004; ' + escSQ(msg) + ' (' + data.total_in_bucket + ' total në storage)</span>';
+                    showToast(msg, 'success');
+                    loadDocuments();
+                    startPolling();
+                } else {
+                    statusEl.innerHTML = '<span style="color:var(--text-muted);">&#10004; Të gjitha dokumentet janë tashmë të sinkronizuara. (' + data.total_in_bucket + ' në storage)</span>';
+                }
+                if (data.errors && data.errors.length) {
+                    statusEl.innerHTML += '<br><span style="color:var(--error);">Gabime: ' + data.errors.join(', ') + '</span>';
+                }
+            } catch (e) {
+                statusEl.innerHTML = '<span style="color:var(--error);">Gabim: ' + escSQ(e.message) + '</span>';
+                showToast(e.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '&#128260; Sinkronizo nga Storage';
+            }
         }
 
         (async function checkAdminAuth() {

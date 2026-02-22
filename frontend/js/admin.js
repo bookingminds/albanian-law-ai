@@ -159,7 +159,6 @@ async function loadDocuments() {
         const data = await res.json();
         renderDocuments(data.documents);
 
-        // Check if any are still processing
         const processing = data.documents.some(d =>
             d.status === 'uploaded' || d.status === 'processing'
         );
@@ -212,10 +211,20 @@ function renderDocuments(docs) {
         const statusIcon = {
             'uploaded': '&#9202;',
             'processing': '&#9881;',
+            'ready': '&#9989;',
             'processed': '&#9989;',
+            'failed': '&#10060;',
             'error': '&#10060;',
         }[doc.status] || '';
-        const statusLabel = t('status.' + doc.status) || doc.status;
+        const statusLabels = {
+            'uploaded': 'Ngarkuar',
+            'processing': 'Në përpunim...',
+            'ready': 'Gati',
+            'processed': 'Gati',
+            'failed': 'Dështoi',
+            'error': 'Gabim',
+        };
+        const statusLabel = statusLabels[doc.status] || doc.status;
 
         const meta = doc.metadata_json ? (() => {
             try { return JSON.parse(doc.metadata_json); } catch { return {}; }
@@ -238,8 +247,8 @@ function renderDocuments(docs) {
                     <span class="badge ${statusClass}">
                         ${statusIcon} ${statusLabel}
                     </span>
-                    ${doc.status === 'processed' ? `<div class="doc-meta">${doc.total_chunks} chunks</div>` : ''}
-                    ${doc.status === 'error' ? `<div class="doc-meta" style="color:var(--error)">${escapeHtml(doc.error_message || '')}</div>` : ''}
+                    ${(doc.status === 'ready' || doc.status === 'processed') ? `<div class="doc-meta">${doc.total_chunks || 0} chunks</div>` : ''}
+                    ${(doc.status === 'failed' || doc.status === 'error') ? `<div class="doc-meta" style="color:var(--error)">${escapeHtml(doc.error_message || '')}</div>` : ''}
                 </td>
                 <td>
                     <button class="btn btn-sm btn-danger" data-doc-id="${doc.id}" data-doc-filename="${filenameAttr}" onclick="deleteDoc(this)">

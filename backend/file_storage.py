@@ -97,6 +97,43 @@ async def delete_file(path: str) -> bool:
         return False
 
 
+async def list_bucket_files(prefix: str = "", limit: int = 1000) -> list[dict]:
+    """List all files in the bucket (optionally filtered by prefix).
+
+    Returns a list of dicts: {"name": "file.pdf", "id": "...", "metadata": {...}, ...}
+    Handles nested folders by recursively listing.
+    """
+    url = f"{settings.SUPABASE_URL}/storage/v1/object/list/{BUCKET}"
+    headers = _headers()
+    headers["Content-Type"] = "application/json"
+
+    all_files: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(url, headers=headers, json={
+                "prefix": prefix,
+                "limit": limit,
+                "offset": 0,
+                "sortBy": {"column": "name", "order": "asc"},
+            })
+            if resp.status_code != 200:
+                logger.error(f"list_bucket_files failed: {resp.status_code} {resp.text[:300]}")
+                return []
+            items = resp.json()
+            for item in items:
+                full_path = f"{prefix}/{item['name']}" if prefix else item["name"]
+                full_path = full_path.strip("/")
+                if item.get("id") is None:
+                    subfolder = await list_bucket_files(prefix=full_path, limit=limit)
+                    all_files.extend(subfolder)
+                else:
+                    item["full_path"] = full_path
+                    all_files.append(item)
+    except Exception as e:
+        logger.error(f"list_bucket_files error: {e}")
+    return all_files
+
+
 def storage_path_for_doc(user_id: int, filename: str) -> str:
     """Generate the storage path for a document file."""
     return f"user_{user_id}/{filename}"
