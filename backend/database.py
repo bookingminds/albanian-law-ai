@@ -13,6 +13,22 @@ from backend.config import settings
 
 logger = logging.getLogger("rag.database")
 
+
+def _parse_ts(val) -> datetime | None:
+    """Convert a string/datetime to a datetime object, or None."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val
+    s = str(val).strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 _pool: asyncpg.Pool | None = None
 
 
@@ -574,7 +590,7 @@ async def create_user(
             """INSERT INTO users (email, password_hash, is_admin, trial_ends_at, signup_ip)
                VALUES ($1, $2, $3, $4, $5) RETURNING id""",
             email.lower().strip(), password_hash, is_admin,
-            trial_ends_at or "", signup_ip or "",
+            _parse_ts(trial_ends_at), signup_ip or None,
         )
         return row["id"]
 
@@ -631,7 +647,7 @@ async def create_user_from_supabase(
             """INSERT INTO users (email, password_hash, is_admin, supabase_uid, trial_ends_at, signup_ip)
                VALUES ($1, '', $2, $3, $4, $5) RETURNING id""",
             email.lower().strip(), is_admin,
-            supabase_uid, trial_ends_at or "", signup_ip or "",
+            supabase_uid or None, _parse_ts(trial_ends_at), signup_ip or None,
         )
         return row["id"]
 
@@ -653,16 +669,16 @@ async def set_trial_ends_at(user_id: int, trial_ends_at: str):
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE users SET trial_ends_at = $1 WHERE id = $2",
-            trial_ends_at, user_id,
+            _parse_ts(trial_ends_at), user_id,
         )
 
 
 async def mark_trial_used(user_id: int, at: str = None):
-    at = at or datetime.utcnow().isoformat()
+    ts = _parse_ts(at) or datetime.utcnow()
     pool = await _get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE users SET trial_used_at = $1 WHERE id = $2", at, user_id
+            "UPDATE users SET trial_used_at = $1 WHERE id = $2", ts, user_id
         )
 
 
@@ -671,7 +687,7 @@ async def set_trial_used_on_subscription(user_id: int):
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE users SET trial_used_at = COALESCE(trial_used_at, $1) WHERE id = $2",
-            datetime.utcnow().isoformat(), user_id,
+            datetime.utcnow(), user_id,
         )
 
 
@@ -682,7 +698,8 @@ async def upsert_subscription(user_id: int, purchase_token: str,
                               current_period_end: str,
                               platform: str = "google_play"):
     pool = await _get_pool()
-    now = datetime.utcnow().isoformat()
+    now = datetime.utcnow()
+    period_end = _parse_ts(current_period_end)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT id FROM subscriptions WHERE purchase_token = $1",
@@ -693,7 +710,7 @@ async def upsert_subscription(user_id: int, purchase_token: str,
                 """UPDATE subscriptions SET status = $1, current_period_end = $2,
                    updated_at = $3, product_id = $4, platform = $5
                    WHERE purchase_token = $6""",
-                status, current_period_end, now, product_id, platform,
+                status, period_end, now, product_id, platform,
                 purchase_token,
             )
         else:
@@ -703,7 +720,7 @@ async def upsert_subscription(user_id: int, purchase_token: str,
                     current_period_end, platform, updated_at)
                    VALUES ($1, $2, $3, $4, $5, $6, $7)""",
                 user_id, purchase_token, product_id, status,
-                current_period_end, platform, now,
+                period_end, platform, now,
             )
 
 

@@ -49,25 +49,25 @@ async def supabase_sign_up(email: str, password: str) -> dict:
                 "email_confirm": True,
             },
         )
-    data = r.json()
-    if r.status_code >= 400:
-        msg = data.get("msg") or data.get("error_description") or data.get("message") or str(data)
-        if "already been registered" in msg.lower() or "already exists" in msg.lower():
-            raise HTTPException(status_code=409, detail="Ky email është tashmë i regjistruar.")
-        raise HTTPException(status_code=r.status_code, detail=msg)
-    sb_user = data
-    session_data = {"user": sb_user, "session": None}
-    try:
-        login_r = await client.post(
-            _sb_url("/auth/v1/token?grant_type=password"),
-            headers=_sb_headers(),
-            json={"email": email, "password": password},
-        )
-        if login_r.status_code == 200:
-            login_data = login_r.json()
-            session_data["session"] = {"access_token": login_data.get("access_token", "")}
-    except Exception:
-        logger.warning("Auto-login after signup failed, user will need to log in manually")
+        data = r.json()
+        if r.status_code >= 400:
+            msg = data.get("msg") or data.get("error_description") or data.get("message") or str(data)
+            if "already been registered" in msg.lower() or "already exists" in msg.lower():
+                raise HTTPException(status_code=409, detail="Ky email është tashmë i regjistruar.")
+            raise HTTPException(status_code=r.status_code, detail=msg)
+        sb_user = data
+        session_data = {"user": sb_user, "session": None}
+        try:
+            login_r = await client.post(
+                _sb_url("/auth/v1/token?grant_type=password"),
+                headers=_sb_headers(),
+                json={"email": email, "password": password},
+            )
+            if login_r.status_code == 200:
+                login_data = login_r.json()
+                session_data["session"] = {"access_token": login_data.get("access_token", "")}
+        except Exception:
+            logger.warning("Auto-login after signup failed, user will need to log in manually")
     return session_data
 
 
