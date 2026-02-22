@@ -1,7 +1,6 @@
 """PostgreSQL database for document metadata, chunks tracking, chat history, users.
 
-Uses asyncpg with a connection pool. Falls back to SQLite (aiosqlite) when
-DATABASE_URL is not set (local development).
+Uses asyncpg with a connection pool.  Requires DATABASE_URL to be set.
 """
 
 import asyncpg
@@ -86,10 +85,20 @@ async def init_db():
                 page_count INTEGER DEFAULT 0,
                 error_message TEXT,
                 metadata_json TEXT DEFAULT '{}',
+                storage_bucket TEXT DEFAULT 'legal-docs',
+                storage_path TEXT,
                 uploaded_at TIMESTAMPTZ DEFAULT NOW(),
                 processed_at TIMESTAMPTZ
             )
         """)
+        # Add storage columns if table already exists without them
+        for col, default in [("storage_bucket", "'legal-docs'"), ("storage_path", "NULL")]:
+            try:
+                await conn.execute(
+                    f"ALTER TABLE documents ADD COLUMN IF NOT EXISTS {col} TEXT DEFAULT {default}"
+                )
+            except Exception:
+                pass
 
         # ── Document Chunks ──
         await conn.execute("""
@@ -236,17 +245,19 @@ async def init_db():
 async def create_document(user_id: int, filename: str, original_filename: str,
                           file_type: str, file_size: int,
                           title: str = None, law_number: str = None,
-                          law_date: str = None) -> int:
+                          law_date: str = None,
+                          storage_bucket: str = "legal-docs",
+                          storage_path: str = None) -> int:
     pool = await _get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """INSERT INTO documents
                (user_id, filename, original_filename, file_type, file_size,
-                title, law_number, law_date, status)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'processing')
+                title, law_number, law_date, storage_bucket, storage_path, status)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'processing')
                RETURNING id""",
             user_id, filename, original_filename, file_type, file_size,
-            title, law_number, law_date,
+            title, law_number, law_date, storage_bucket, storage_path,
         )
         return row["id"]
 
@@ -277,7 +288,7 @@ async def update_document_status(doc_id: int, status: str,
             values.append(metadata["law_date"]); idx += 1
     if status in ("ready", "failed"):
         parts.append(f"processed_at = ${idx}")
-        values.append(datetime.utcnow().isoformat()); idx += 1
+        values.append(datetime.utcnow()); idx += 1
 
     values.append(doc_id)
     query = f"UPDATE documents SET {', '.join(parts)} WHERE id = ${idx}"

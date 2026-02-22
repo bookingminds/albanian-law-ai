@@ -100,3 +100,20 @@ async def delete_file(path: str) -> bool:
 def storage_path_for_doc(user_id: int, filename: str) -> str:
     """Generate the storage path for a document file."""
     return f"user_{user_id}/{filename}"
+
+
+async def check_storage_health() -> dict:
+    """Verify Supabase Storage is reachable and bucket exists.
+    Returns {"status": "ok", "bucket": BUCKET} or {"status": "error", "detail": ...}
+    """
+    url = f"{settings.SUPABASE_URL}/storage/v1/bucket/{BUCKET}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers=_headers())
+            if resp.status_code == 200:
+                return {"status": "ok", "bucket": BUCKET}
+            if resp.status_code == 404:
+                return {"status": "error", "detail": f"Bucket '{BUCKET}' not found — create it in Supabase Dashboard"}
+            return {"status": "error", "detail": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}

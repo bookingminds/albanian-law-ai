@@ -76,9 +76,7 @@ class Settings(BaseSettings):
 
     # Paths
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
-    UPLOAD_DIR: Path = Path(os.environ.get("UPLOAD_DIR", str(BASE_DIR / "uploads")))
     DATA_DIR: Path = Path(os.environ.get("DATA_DIR", str(BASE_DIR / "data")))
-    DB_PATH: Path = Path(os.environ.get("DB_PATH", str(BASE_DIR / "albanian_law.db")))
 
     class Config:
         env_file = ".env"
@@ -87,5 +85,4 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-settings.UPLOAD_DIR.mkdir(exist_ok=True)
 settings.DATA_DIR.mkdir(exist_ok=True)

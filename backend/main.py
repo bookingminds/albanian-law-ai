@@ -54,7 +54,15 @@ from backend.database import (
     create_suggested_question, update_suggested_question, delete_suggested_question,
 )
 from backend.database import _get_pool
-from backend.file_storage import upload_file as storage_upload, download_file as storage_download, delete_file as storage_delete, storage_path_for_doc
+from backend.file_storage import upload_file as storage_upload, download_file as storage_download, delete_file as storage_delete, storage_path_for_doc, check_storage_health
+
+
+def _resolve_storage_path(doc: dict) -> str:
+    """Get the Supabase Storage path from DB record, or reconstruct it."""
+    if doc.get("storage_path"):
+        return doc["storage_path"]
+    return storage_path_for_doc(doc.get("user_id", 0), doc["filename"])
+
 
 SUBSCRIPTION_PRICE_EUR = 4.99
 from backend.trial_abuse import is_disposable_email, get_client_ip
@@ -574,6 +582,8 @@ async def user_upload_document(
         file_type=ext,
         file_size=len(content),
         title=title,
+        storage_bucket="legal-docs",
+        storage_path=spath,
     )
 
     asyncio.create_task(
@@ -636,7 +646,7 @@ async def user_delete_document(doc_id: int, user: dict = Depends(require_admin))
 
     await delete_document_chunks(doc_id)
 
-    spath = storage_path_for_doc(user["id"], doc["filename"])
+    spath = _resolve_storage_path(doc)
     await storage_delete(spath)
 
     await delete_document(doc_id)
@@ -655,7 +665,7 @@ async def user_retry_document(doc_id: int, user: dict = Depends(require_admin)):
             detail="Vetëm dokumentet e dështuara mund të ripërpunohen."
         )
 
-    spath = storage_path_for_doc(user["id"], doc["filename"])
+    spath = _resolve_storage_path(doc)
     try:
         file_bytes = await storage_download(spath)
     except FileNotFoundError:
@@ -716,7 +726,7 @@ async def serve_user_document_pdf(
     doc = await get_document_for_user(doc_id, user["id"])
     if not doc:
         raise HTTPException(status_code=404, detail="Dokumenti nuk u gjet.")
-    spath = storage_path_for_doc(user["id"], doc["filename"])
+    spath = _resolve_storage_path(doc)
     try:
         file_bytes = await storage_download(spath)
     except FileNotFoundError:
@@ -771,6 +781,8 @@ async def upload_document(
         title=title,
         law_number=law_number,
         law_date=law_date,
+        storage_bucket="legal-docs",
+        storage_path=spath,
     )
 
     asyncio.create_task(
@@ -806,8 +818,7 @@ async def remove_document(doc_id: int, user: dict = Depends(require_admin)):
     if not doc:
         raise HTTPException(status_code=404, detail="Dokumenti nuk u gjet.")
     await delete_document_chunks(doc_id)
-    doc_owner = doc.get("user_id") or user["id"]
-    spath = storage_path_for_doc(doc_owner, doc["filename"])
+    spath = _resolve_storage_path(doc)
     await storage_delete(spath)
     await delete_document(doc_id)
     return {"message": "Document deleted successfully."}
@@ -1372,7 +1383,8 @@ async def health_check():
             await conn.fetchval("SELECT 1")
     except Exception as e:
         db_status = f"error: {e}"
-    return {"status": "ok", "db": db_status}
+    storage = await check_storage_health()
+    return {"status": "ok", "db": db_status, "storage": storage.get("status", "unknown")}
 
 
 @app.get("/api/health/detailed")
@@ -1385,12 +1397,14 @@ async def health_check_detailed():
             await conn.fetchval("SELECT 1")
     except Exception as e:
         db_status = f"error: {e}"
+    storage = await check_storage_health()
     docs = await get_all_documents()
     ready = [d for d in docs if d.get("status") == "ready"]
     stats = get_store_stats()
     return {
         "status": "healthy",
         "db": db_status,
+        "storage": storage,
         "documents_total": len(docs),
         "documents_ready": len(ready),
         "vector_store": stats,
@@ -1442,12 +1456,12 @@ async def debug_reprocess(doc_id: int, user: dict = Depends(require_admin)):
     doc = await get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
-    doc_user_id = doc.get("user_id") or user["id"]
-    spath = storage_path_for_doc(doc_user_id, doc["filename"])
+    spath = _resolve_storage_path(doc)
     try:
         file_bytes = await storage_download(spath)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found in storage.")
+    doc_user_id = doc.get("user_id") or user["id"]
     await delete_document_chunks(doc_id)
     await delete_chunks_for_document(doc_id)
     asyncio.create_task(
