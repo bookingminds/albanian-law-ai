@@ -157,8 +157,11 @@ async def generate_answer(question: str, user_id: int,
                                      search_result, query_variants)
 
     # ── 3. Confidence gate ────────────────────────────────
+    has_vector_results = any(c.get("similarity", 0) > 0 for c in chunks)
     top_similarity = max(c.get("similarity", 0) for c in chunks)
-    if top_similarity < settings.CONFIDENCE_MIN_SIMILARITY:
+    has_keyword_results = any("keyword" in c.get("sources", []) for c in chunks)
+
+    if has_vector_results and top_similarity < settings.CONFIDENCE_MIN_SIMILARITY:
         logger.info(
             f"Confidence BLOCKED: top_sim={top_similarity:.4f} < "
             f"threshold={settings.CONFIDENCE_MIN_SIMILARITY}"
@@ -167,6 +170,11 @@ async def generate_answer(question: str, user_id: int,
             search_time + expand_time, top_similarity,
             settings.CONFIDENCE_MIN_SIMILARITY,
             debug_mode, search_result, query_variants
+        )
+    if not has_vector_results and has_keyword_results:
+        logger.info(
+            f"Confidence gate bypassed: no vector results but "
+            f"{len(chunks)} keyword chunks found"
         )
 
     # ── 4. Context stitching (±2 neighbors) ──────────────
@@ -348,8 +356,11 @@ async def generate_answer_stream(question: str, user_id: int,
         return
 
     # 3. Confidence gate
+    has_vector = any(c.get("similarity", 0) > 0 for c in chunks)
     top_similarity = max(c.get("similarity", 0) for c in chunks)
-    if top_similarity < settings.CONFIDENCE_MIN_SIMILARITY:
+    has_kw = any("keyword" in c.get("sources", []) for c in chunks)
+
+    if has_vector and top_similarity < settings.CONFIDENCE_MIN_SIMILARITY:
         yield json.dumps({
             "type": "chunk",
             "text": f"{NO_CONTEXT_RESPONSE}\n\n{SUGGEST_REPHRASE}"
