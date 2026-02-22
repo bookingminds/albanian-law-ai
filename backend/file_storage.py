@@ -10,7 +10,7 @@ from backend.config import settings
 
 logger = logging.getLogger("rag.storage")
 
-BUCKET = "legal-docs"
+BUCKET = "Ligje"
 _TIMEOUT = 60.0
 
 

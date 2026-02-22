@@ -582,7 +582,7 @@ async def user_upload_document(
         file_type=ext,
         file_size=len(content),
         title=title,
-        storage_bucket="legal-docs",
+        storage_bucket="Ligje",
         storage_path=spath,
     )
 
@@ -781,7 +781,7 @@ async def upload_document(
         title=title,
         law_number=law_number,
         law_date=law_date,
-        storage_bucket="legal-docs",
+        storage_bucket="Ligje",
         storage_path=spath,
     )
 

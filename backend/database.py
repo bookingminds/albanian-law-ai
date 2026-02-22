@@ -85,14 +85,14 @@ async def init_db():
                 page_count INTEGER DEFAULT 0,
                 error_message TEXT,
                 metadata_json TEXT DEFAULT '{}',
-                storage_bucket TEXT DEFAULT 'legal-docs',
+                storage_bucket TEXT DEFAULT 'Ligje',
                 storage_path TEXT,
                 uploaded_at TIMESTAMPTZ DEFAULT NOW(),
                 processed_at TIMESTAMPTZ
             )
         """)
         # Add storage columns if table already exists without them
-        for col, default in [("storage_bucket", "'legal-docs'"), ("storage_path", "NULL")]:
+        for col, default in [("storage_bucket", "'Ligje'"), ("storage_path", "NULL")]:
             try:
                 await conn.execute(
                     f"ALTER TABLE documents ADD COLUMN IF NOT EXISTS {col} TEXT DEFAULT {default}"
@@ -246,7 +246,7 @@ async def create_document(user_id: int, filename: str, original_filename: str,
                           file_type: str, file_size: int,
                           title: str = None, law_number: str = None,
                           law_date: str = None,
-                          storage_bucket: str = "legal-docs",
+                          storage_bucket: str = "Ligje",
                           storage_path: str = None) -> int:
     pool = await _get_pool()
     async with pool.acquire() as conn:
