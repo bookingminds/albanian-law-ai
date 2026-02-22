@@ -830,12 +830,24 @@ async def remove_document(doc_id: int, user: dict = Depends(require_admin)):
 
 # ── Sync from Storage ────────────────────────────────────────
 
+async def _sync_download_and_process(doc_id: int, user_id: int,
+                                      spath: str, ext: str):
+    """Background: download file from storage then process it."""
+    try:
+        file_bytes = await storage_download(spath)
+        await process_document(doc_id, user_id, file_bytes, ext)
+    except Exception as e:
+        logger.error(f"[sync] Processing {spath} (doc {doc_id}) failed: {e}")
+        from backend.database import update_document_status
+        await update_document_status(doc_id, "failed", error_message=str(e)[:500])
+
+
 @app.post("/api/admin/sync-storage")
 async def sync_from_storage(user: dict = Depends(require_admin)):
     """Scan Supabase Storage bucket and import files missing from the DB.
 
-    For each file found in the bucket that has no matching row in `documents`,
-    insert a metadata row and kick off background processing (extract, chunk, embed).
+    Inserts metadata rows immediately, then kicks off background processing
+    for each new file. Returns fast — processing happens asynchronously.
     """
     bucket_files = await list_bucket_files()
     if not bucket_files:
@@ -881,16 +893,9 @@ async def sync_from_storage(user: dict = Depends(require_admin)):
                 storage_path=spath,
             )
             synced += 1
-
-            try:
-                file_bytes = await storage_download(spath)
-                asyncio.create_task(
-                    _process_in_background(doc_id, user["id"], file_bytes, ext)
-                )
-            except Exception as dl_err:
-                logger.warning(f"Sync: downloaded failed for {spath}: {dl_err}")
-                errors.append(f"{fname}: download failed")
-
+            asyncio.create_task(
+                _sync_download_and_process(doc_id, user["id"], spath, ext)
+            )
         except Exception as ins_err:
             logger.warning(f"Sync: insert failed for {spath}: {ins_err}")
             errors.append(f"{fname}: {str(ins_err)[:100]}")
@@ -899,7 +904,7 @@ async def sync_from_storage(user: dict = Depends(require_admin)):
         "synced": synced,
         "total_in_bucket": len(bucket_files),
         "already_known": len(bucket_files) - synced - len(errors),
-        "message": f"U sinkronizuan {synced} dokumente të reja.",
+        "message": f"U sinkronizuan {synced} dokumente të reja. Përpunimi vazhdon në sfond.",
     }
     if errors:
         result["errors"] = errors
