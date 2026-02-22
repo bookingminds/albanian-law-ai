@@ -1551,20 +1551,26 @@ async def debug_store_stats(user: dict = Depends(require_admin)):
 @app.get("/api/debug/db-chunks")
 async def debug_db_chunks(user: dict = Depends(require_admin)):
     """Check how many chunks exist in PostgreSQL and test FTS."""
+    from backend.database import keyword_search_chunks, _build_pg_tsquery
     pool = await _get_pool()
     async with pool.acquire() as conn:
         total = await conn.fetchval("SELECT COUNT(*) FROM document_chunks")
-        by_doc = await conn.fetch(
-            """SELECT document_id, COUNT(*) as cnt
-               FROM document_chunks GROUP BY document_id ORDER BY document_id"""
+        user_chunks = await conn.fetchval(
+            "SELECT COUNT(*) FROM document_chunks WHERE user_id = $1", user["id"]
         )
-        sample = await conn.fetch(
-            "SELECT id, document_id, chunk_index, LENGTH(content) as len FROM document_chunks LIMIT 5"
-        )
+    test_query = "pushim vjetor"
+    tsquery = _build_pg_tsquery(test_query)
+    kw_results = await keyword_search_chunks(test_query, user_id=user["id"], limit=3)
+    kw_results_all = await keyword_search_chunks(test_query, user_id=None, limit=3)
     return {
         "total_chunks_in_db": total,
-        "chunks_by_document": [dict(r) for r in by_doc],
-        "sample_chunks": [dict(r) for r in sample],
+        "chunks_for_user": user_chunks,
+        "test_query": test_query,
+        "tsquery": tsquery,
+        "kw_results_user_filtered": len(kw_results),
+        "kw_results_no_filter": len(kw_results_all),
+        "kw_preview": [{"id": r["id"], "text": r["content"][:100]} for r in kw_results[:2]],
+        "kw_preview_all": [{"id": r["id"], "text": r["content"][:100]} for r in kw_results_all[:2]],
     }
 
 
