@@ -205,62 +205,68 @@ async def register(data: RegisterRequest, request: Request):
     from backend.auth import _supabase_configured, supabase_sign_up
     from backend.database import create_user_from_supabase
 
-    email = data.email.strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(status_code=400, detail="Email i pavlefshëm.")
-    if len(data.password) < 8:
-        raise HTTPException(
-            status_code=400,
-            detail="Fjalëkalimi duhet të ketë të paktën 8 karaktere.",
+    try:
+        email = data.email.strip().lower()
+        if not email or "@" not in email:
+            raise HTTPException(status_code=400, detail="Email i pavlefshëm.")
+        if len(data.password) < 8:
+            raise HTTPException(
+                status_code=400,
+                detail="Fjalëkalimi duhet të ketë të paktën 8 karaktere.",
+            )
+        if settings.BLOCK_DISPOSABLE_EMAILS and is_disposable_email(email):
+            raise HTTPException(
+                status_code=400,
+                detail="Nuk lejohen adresa email të përkohshme ose të përdorura një herë.",
+            )
+        client_ip = get_client_ip(request)
+        signups_from_ip = await count_signups_from_ip_last_24h(client_ip)
+        if signups_from_ip >= settings.MAX_SIGNUPS_PER_IP_24H:
+            raise HTTPException(
+                status_code=429,
+                detail="Shumë llogari të krijuara nga rrjeti juaj. Provoni më vonë.",
+            )
+        existing = await get_user_by_email(email)
+        if existing:
+            raise HTTPException(status_code=409, detail="Ky email është tashmë i regjistruar.")
+        count = await get_users_count()
+        is_admin = (
+            count == 0
+            or (settings.ADMIN_EMAIL and email == settings.ADMIN_EMAIL.strip().lower())
         )
-    if settings.BLOCK_DISPOSABLE_EMAILS and is_disposable_email(email):
-        raise HTTPException(
-            status_code=400,
-            detail="Nuk lejohen adresa email të përkohshme ose të përdorura një herë.",
-        )
-    client_ip = get_client_ip(request)
-    signups_from_ip = await count_signups_from_ip_last_24h(client_ip)
-    if signups_from_ip >= settings.MAX_SIGNUPS_PER_IP_24H:
-        raise HTTPException(
-            status_code=429,
-            detail="Shumë llogari të krijuara nga rrjeti juaj. Provoni më vonë.",
-        )
-    existing = await get_user_by_email(email)
-    if existing:
-        raise HTTPException(status_code=409, detail="Ky email është tashmë i regjistruar.")
-    count = await get_users_count()
-    is_admin = (
-        count == 0
-        or (settings.ADMIN_EMAIL and email == settings.ADMIN_EMAIL.strip().lower())
-    )
-    trial_ends_at = (
-        datetime.utcnow() + timedelta(days=settings.TRIAL_DAYS)
-    ).strftime("%Y-%m-%dT%H:%M:%S")
+        trial_ends_at = (
+            datetime.utcnow() + timedelta(days=settings.TRIAL_DAYS)
+        ).strftime("%Y-%m-%dT%H:%M:%S")
 
-    if _supabase_configured:
-        sb_data = await supabase_sign_up(email, data.password)
-        sb_user = sb_data.get("user") or {}
-        sb_uid = sb_user.get("id", "")
-        access_token = (sb_data.get("session") or {}).get("access_token", "")
+        if _supabase_configured:
+            sb_data = await supabase_sign_up(email, data.password)
+            sb_user = sb_data.get("user") or {}
+            sb_uid = sb_user.get("id", "")
+            access_token = (sb_data.get("session") or {}).get("access_token", "")
 
-        user_id = await create_user_from_supabase(
-            email, supabase_uid=sb_uid, is_admin=is_admin,
-            trial_ends_at=trial_ends_at, signup_ip=client_ip or "",
-        )
-        token = access_token or create_access_token(user_id, email, is_admin)
-    else:
-        user_id = await create_user(
-            email, hash_password(data.password), is_admin=is_admin,
-            trial_ends_at=trial_ends_at, signup_ip=client_ip or "",
-        )
-        token = create_access_token(user_id, email, is_admin)
+            user_id = await create_user_from_supabase(
+                email, supabase_uid=sb_uid, is_admin=is_admin,
+                trial_ends_at=trial_ends_at, signup_ip=client_ip or "",
+            )
+            token = access_token or create_access_token(user_id, email, is_admin)
+        else:
+            user_id = await create_user(
+                email, hash_password(data.password), is_admin=is_admin,
+                trial_ends_at=trial_ends_at, signup_ip=client_ip or "",
+            )
+            token = create_access_token(user_id, email, is_admin)
 
-    return {
-        "token": token,
-        "user": {"id": user_id, "email": email, "is_admin": is_admin},
-        "trial_ends_at": trial_ends_at,
-        "trial_days": settings.TRIAL_DAYS,
-    }
+        return {
+            "token": token,
+            "user": {"id": user_id, "email": email, "is_admin": is_admin},
+            "trial_ends_at": trial_ends_at,
+            "trial_days": settings.TRIAL_DAYS,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Registration failed for {data.email}: {type(e).__name__}: {e}")
+        return JSONResponse(status_code=500, content={"detail": f"Registration error: {str(e)}"})
 
 
 @app.post("/api/auth/login")
@@ -272,64 +278,69 @@ async def login(data: LoginRequest, request: Request):
 
     email = data.email.strip().lower()
 
-    if _supabase_configured:
-        try:
-            sb_data = await supabase_sign_in(email, data.password)
-            access_token = sb_data.get("access_token", "")
-            sb_user = sb_data.get("user") or {}
-            sb_uid = sb_user.get("id", "")
+    try:
+        if _supabase_configured:
+            try:
+                sb_data = await supabase_sign_in(email, data.password)
+                access_token = sb_data.get("access_token", "")
+                sb_user = sb_data.get("user") or {}
+                sb_uid = sb_user.get("id", "")
 
-            user = await get_user_by_supabase_uid(sb_uid)
-            if not user:
+                user = await get_user_by_supabase_uid(sb_uid)
+                if not user:
+                    user = await get_user_by_email(email)
+                    if user:
+                        await link_supabase_uid(user["id"], sb_uid)
+                    else:
+                        count = await get_users_count()
+                        is_admin = (count == 0 or (settings.ADMIN_EMAIL and email == settings.ADMIN_EMAIL.strip().lower()))
+                        trial_ends_at = (datetime.utcnow() + timedelta(days=settings.TRIAL_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
+                        user_id = await create_user_from_supabase(
+                            email, supabase_uid=sb_uid, is_admin=is_admin,
+                            trial_ends_at=trial_ends_at,
+                        )
+                        user = await get_user_by_id(user_id)
+
+                return {
+                    "token": access_token,
+                    "user": {
+                        "id": user["id"],
+                        "email": user["email"],
+                        "is_admin": bool(user.get("is_admin")),
+                    },
+                }
+            except HTTPException:
                 user = await get_user_by_email(email)
-                if user:
-                    await link_supabase_uid(user["id"], sb_uid)
-                else:
-                    count = await get_users_count()
-                    is_admin = (count == 0 or (settings.ADMIN_EMAIL and email == settings.ADMIN_EMAIL.strip().lower()))
-                    trial_ends_at = (datetime.utcnow() + timedelta(days=settings.TRIAL_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
-                    user_id = await create_user_from_supabase(
-                        email, supabase_uid=sb_uid, is_admin=is_admin,
-                        trial_ends_at=trial_ends_at,
-                    )
-                    user = await get_user_by_id(user_id)
-
+                if user and user.get("password_hash") and not user.get("supabase_uid"):
+                    if verify_password(data.password, user["password_hash"]):
+                        token = create_access_token(user["id"], user["email"], bool(user.get("is_admin")))
+                        return {
+                            "token": token,
+                            "user": {
+                                "id": user["id"],
+                                "email": user["email"],
+                                "is_admin": bool(user.get("is_admin")),
+                            },
+                        }
+                raise HTTPException(status_code=401, detail="Email ose fjalëkalim i gabuar.")
+        else:
+            user = await get_user_by_email(email)
+            if not user or not verify_password(data.password, user["password_hash"]):
+                raise HTTPException(status_code=401, detail="Email ose fjalëkalim i gabuar.")
+            token = create_access_token(user["id"], user["email"], bool(user.get("is_admin")))
             return {
-                "token": access_token,
+                "token": token,
                 "user": {
                     "id": user["id"],
                     "email": user["email"],
                     "is_admin": bool(user.get("is_admin")),
                 },
             }
-        except HTTPException:
-            # Supabase login failed — fall back to local auth for pre-existing users
-            user = await get_user_by_email(email)
-            if user and user.get("password_hash") and not user.get("supabase_uid"):
-                if verify_password(data.password, user["password_hash"]):
-                    token = create_access_token(user["id"], user["email"], bool(user.get("is_admin")))
-                    return {
-                        "token": token,
-                        "user": {
-                            "id": user["id"],
-                            "email": user["email"],
-                            "is_admin": bool(user.get("is_admin")),
-                        },
-                    }
-            raise HTTPException(status_code=401, detail="Email ose fjalëkalim i gabuar.")
-    else:
-        user = await get_user_by_email(email)
-        if not user or not verify_password(data.password, user["password_hash"]):
-            raise HTTPException(status_code=401, detail="Email ose fjalëkalim i gabuar.")
-        token = create_access_token(user["id"], user["email"], bool(user.get("is_admin")))
-        return {
-            "token": token,
-            "user": {
-                "id": user["id"],
-                "email": user["email"],
-                "is_admin": bool(user.get("is_admin")),
-            },
-        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login failed for {data.email}: {type(e).__name__}: {e}")
+        return JSONResponse(status_code=500, content={"detail": f"Login error: {str(e)}"})
 
 
 class ForgotPasswordRequest(BaseModel):
