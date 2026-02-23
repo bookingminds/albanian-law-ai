@@ -154,8 +154,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
 
 frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
@@ -182,7 +182,7 @@ async def serve_pricing():
 
 
 @app.get("/admin")
-async def serve_admin():
+async def serve_admin(request: Request):
     return FileResponse(str(frontend_dir / "admin.html"))
 
 
@@ -276,7 +276,7 @@ async def register(data: RegisterRequest, request: Request):
         raise
     except Exception as e:
         logger.error(f"Registration failed for {data.email}: {type(e).__name__}: {e}")
-        return JSONResponse(status_code=500, content={"detail": f"Registration error: {str(e)}"})
+        return JSONResponse(status_code=500, content={"detail": "Regjistrimi dështoi. Provoni përsëri."})
 
 
 @app.post("/api/auth/login")
@@ -350,7 +350,7 @@ async def login(data: LoginRequest, request: Request):
         raise
     except Exception as e:
         logger.error(f"Login failed for {data.email}: {type(e).__name__}: {e}")
-        return JSONResponse(status_code=500, content={"detail": f"Login error: {str(e)}"})
+        return JSONResponse(status_code=500, content={"detail": "Hyrja dështoi. Provoni përsëri."})
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -586,7 +586,7 @@ async def billing_create_checkout(user: dict = Depends(get_current_user)):
         return {"url": url}
     except Exception as e:
         logger.error(f"2Checkout checkout URL failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Gabim gjatë krijimit të sesionit: {str(e)[:200]}")
+        raise HTTPException(status_code=500, detail="Gabim gjatë krijimit të sesionit. Provoni përsëri.")
 
 
 @app.post("/api/2checkout/webhook")

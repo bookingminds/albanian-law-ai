@@ -93,3 +93,18 @@ class Settings(BaseSettings):
 settings = Settings()
 
 settings.DATA_DIR.mkdir(exist_ok=True)
+
+_is_prod = settings.SERVER_URL != "http://localhost:8000"
+if _is_prod:
+    _missing = []
+    if settings.JWT_SECRET == "change-me-in-production":
+        _missing.append("JWT_SECRET")
+    if not settings.DATABASE_URL:
+        _missing.append("DATABASE_URL")
+    if not settings.OPENAI_API_KEY:
+        _missing.append("OPENAI_API_KEY")
+    if _missing:
+        import logging as _log
+        _log.getLogger("config").critical(
+            f"PRODUCTION MODE: missing required env vars: {', '.join(_missing)}"
+        )

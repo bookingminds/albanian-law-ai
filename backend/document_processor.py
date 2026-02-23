@@ -47,20 +47,32 @@ def clean_text(text: str) -> str:
 
 def extract_text_from_pdf_bytes(data: bytes) -> list[dict]:
     pages = []
-    doc = fitz.open(stream=data, filetype="pdf")
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        text = page.get_text("text")
-        cleaned = clean_text(text)
-        if cleaned and len(cleaned) > 10:
-            pages.append({"text": cleaned, "page": page_num + 1})
-    doc.close()
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception as e:
+        logger.error(f"PDF open failed ({len(data)} bytes): {e}")
+        return []
+    try:
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            text = page.get_text("text")
+            cleaned = clean_text(text)
+            if cleaned and len(cleaned) > 10:
+                pages.append({"text": cleaned, "page": page_num + 1})
+    except Exception as e:
+        logger.error(f"PDF page extraction error at page {page_num}: {e}")
+    finally:
+        doc.close()
     logger.info(f"PDF extracted: {len(pages)} pages from bytes ({len(data)} bytes)")
     return pages
 
 
 def extract_text_from_docx_bytes(data: bytes) -> list[dict]:
-    doc = DocxDocument(io.BytesIO(data))
+    try:
+        doc = DocxDocument(io.BytesIO(data))
+    except Exception as e:
+        logger.error(f"DOCX open failed ({len(data)} bytes): {e}")
+        return []
     full_text = []
     for para in doc.paragraphs:
         cleaned = para.text.strip()

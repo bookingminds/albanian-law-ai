@@ -99,6 +99,7 @@ def get_embedding(text: str) -> list[float]:
     response = openai_client.embeddings.create(
         model=settings.EMBEDDING_MODEL,
         input=text,
+        timeout=30.0,
     )
     embedding = response.data[0].embedding
     if not embedding or all(v == 0.0 for v in embedding[:10]):
@@ -123,6 +124,7 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
         response = openai_client.embeddings.create(
             model=settings.EMBEDDING_MODEL,
             input=cleaned_batch,
+            timeout=30.0,
         )
 
         for j, data in enumerate(response.data):

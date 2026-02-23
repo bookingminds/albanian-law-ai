@@ -404,7 +404,9 @@ async function handleStreamResponse(res) {
                 } else if (data.type === 'done') {
                     metrics = data;
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.warn('SSE parse error:', e.message);
+            }
         }
     }
 
@@ -743,7 +745,7 @@ function _sgLoadTopics() {
                 _sgTopicsReady = true;
             }
         })
-        .catch(function() {});
+        .catch(function(e) { console.warn('Topic load failed:', e.message); });
 }
 
 var _SG_STOP = new Set(

@@ -605,7 +605,7 @@ async def expand_query(question: str) -> list[str]:
     try:
         _ensure_client()
         response = _client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=settings.LLM_MODEL,
             messages=[
                 {"role": "system",
                  "content": "Gjenero variante kërkimi në format JSON."},
@@ -618,6 +618,7 @@ async def expand_query(question: str) -> list[str]:
             temperature=0.4,
             max_tokens=1000,
             response_format={"type": "json_object"},
+            timeout=15.0,
         )
         raw = response.choices[0].message.content.strip()
 

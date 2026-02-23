@@ -21,3 +21,10 @@ function showToast(message, type = 'info') {
         setTimeout(function() { toast.remove(); }, 300);
     }, 4000);
 }
+
+function escapeHtml(text) {
+    if (!text) return '';
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(text));
+    return div.innerHTML;
+}

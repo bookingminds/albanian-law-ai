@@ -196,6 +196,7 @@ async def generate_answer(question: str, user_id: int,
             temperature=0.05,
             max_tokens=3000,
             top_p=0.9,
+            timeout=30.0,
         )
         answer = response.choices[0].message.content
     except Exception as e:
@@ -395,6 +396,7 @@ async def generate_answer_stream(question: str, user_id: int,
             max_tokens=3000,
             top_p=0.9,
             stream=True,
+            timeout=60.0,
         )
 
         full_answer = ""
@@ -513,6 +515,7 @@ async def _coverage_check_iteration(
             temperature=0.1,
             max_tokens=400,
             response_format={"type": "json_object"},
+            timeout=20.0,
         )
         raw = check_resp.choices[0].message.content.strip()
         parsed = json.loads(raw)
@@ -608,6 +611,7 @@ async def _coverage_check_iteration(
                 temperature=0.05,
                 max_tokens=3000,
                 top_p=0.9,
+                timeout=30.0,
             )
             new_answer = response.choices[0].message.content
         except Exception as e:
