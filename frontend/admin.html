@@ -106,6 +106,34 @@
                 </div>
             </div>
         </div>
+        <!-- Debug: Billing Tools (admin only) -->
+        <div class="card" style="margin-top:1.5rem; border:1px dashed var(--primary);">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+                <span>Debug: Billing Tools</span>
+            </div>
+            <div style="padding:.75rem;">
+                <p style="font-size:.82rem; color:var(--text-muted); margin-bottom:.75rem;">Force-expire a user's trial so paywall activates immediately. Enter the user's email.</p>
+                <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-end;">
+                    <div class="form-group" style="flex:2; min-width:200px; margin-bottom:0;">
+                        <label>Email i përdoruesit</label>
+                        <input type="email" id="expireTrialEmail" placeholder="user@example.com">
+                    </div>
+                    <button class="btn btn-sm" id="expireTrialBtn" onclick="expireTrialNow()" style="height:38px; border:1px solid var(--error); color:var(--error); background:transparent;">Expire Trial Now</button>
+                </div>
+                <div id="expireTrialResult" style="margin-top:.5rem; font-size:.82rem;"></div>
+
+                <hr style="margin:1rem 0; border:none; border-top:1px solid var(--border);">
+
+                <p style="font-size:.82rem; color:var(--text-muted); margin-bottom:.5rem;">Check billing status for a user:</p>
+                <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-end;">
+                    <div class="form-group" style="flex:2; min-width:200px; margin-bottom:0;">
+                        <input type="email" id="billingCheckEmail" placeholder="user@example.com">
+                    </div>
+                    <button class="btn btn-sm btn-primary" onclick="checkBillingStatus()" style="height:38px;">Check Status</button>
+                </div>
+                <pre id="billingStatusResult" style="margin-top:.5rem; font-size:.75rem; background:var(--surface); padding:.5rem; border-radius:8px; overflow-x:auto; display:none;"></pre>
+            </div>
+        </div>
     </div>
 
     <div class="toast-container" id="toastContainer"></div>
@@ -250,6 +278,46 @@
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = '&#128260; Sinkronizo nga Storage';
+            }
+        }
+
+        async function expireTrialNow() {
+            var email = document.getElementById('expireTrialEmail').value.trim();
+            var resultEl = document.getElementById('expireTrialResult');
+            if (!email) { resultEl.innerHTML = '<span style="color:var(--error);">Jep email-in.</span>'; return; }
+            var btn = document.getElementById('expireTrialBtn');
+            btn.disabled = true;
+            resultEl.innerHTML = '<span style="color:var(--primary);">Duke procesuar...</span>';
+            try {
+                var token = getToken();
+                var res = await fetch('/api/admin/expire-trial', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                    body: JSON.stringify({ email: email }),
+                });
+                var data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Gabim');
+                resultEl.innerHTML = '<span style="color:var(--success);">&#10004; ' + escSQ(data.message) + '</span>';
+            } catch (e) {
+                resultEl.innerHTML = '<span style="color:var(--error);">&#10008; ' + escSQ(e.message) + '</span>';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function checkBillingStatus() {
+            var resultEl = document.getElementById('billingStatusResult');
+            resultEl.style.display = 'block';
+            resultEl.textContent = 'Loading...';
+            try {
+                var token = getToken();
+                var res = await fetch('/api/billing/status', {
+                    headers: { 'Authorization': 'Bearer ' + token },
+                });
+                var data = await res.json();
+                resultEl.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                resultEl.textContent = 'Error: ' + e.message;
             }
         }
 

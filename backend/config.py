@@ -17,8 +17,8 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "text-embedding-3-small"
 
     # Chunking
-    CHUNK_SIZE: int = 900
-    CHUNK_OVERLAP: int = 150
+    CHUNK_SIZE: int = 1400
+    CHUNK_OVERLAP: int = 200
 
     # RAG — retrieval
     TOP_K_RESULTS: int = 10
@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     GOOGLE_PLAY_PACKAGE_NAME: str = "com.zagrid.albanianlawai"
     GOOGLE_PLAY_PRODUCT_ID: str = "law_ai_monthly"
     SUBSCRIPTION_PRICE_EUR: float = 4.99
+
+    # 2Checkout / Verifone (web payments)
+    TWOCO_SELLER_ID: str = ""
+    TWOCO_SECRET_KEY: str = ""
+    TWOCO_PRODUCT_ID: str = ""
+    TWOCO_IPN_SECRET: str = ""
+    TWOCO_SANDBOX: bool = True
 
     SERVER_URL: str = "http://localhost:8000"
     FRONTEND_URL: str = "http://localhost:8000"

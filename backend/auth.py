@@ -231,9 +231,11 @@ async def require_admin(user: dict = Depends(get_current_user)):
 
 
 async def require_subscription(user: dict = Depends(get_current_user)):
-    """Require active Google Play subscription OR valid free trial."""
+    """Require active subscription (2Checkout/Google Play) OR valid free trial."""
     from backend.database import get_active_subscription, mark_trial_used, set_trial_ends_at
     if user.get("is_admin"):
+        return user
+    if user.get("is_premium") and user.get("subscription_status") in ("active", "trialing"):
         return user
     sub = await get_active_subscription(user["id"])
     if sub:

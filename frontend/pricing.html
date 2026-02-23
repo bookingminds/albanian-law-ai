@@ -157,7 +157,7 @@
                     <li><span class="check">&#10003;</span> Privatësi e plotë</li>
                     <li><span class="check">&#10003;</span> Mbështetje prioritare</li>
                 </ul>
-                <a href="/login" class="plan-btn plan-btn-primary">Fillo me Premium</a>
+                <button class="plan-btn plan-btn-primary" id="premiumBtn" onclick="startPremiumCheckout()">Fillo me Premium</button>
             </div>
         </div>
 
@@ -173,7 +173,7 @@
             </div>
             <div class="faq-item">
                 <h3>Cilat metoda pagese pranohen?</h3>
-                <p>Pranojmë kartë krediti/debiti (Visa, Mastercard) përmes Stripe. Pagesa është e sigurt.</p>
+                <p>Pranojmë kartë krediti/debiti (Visa, Mastercard) përmes 2Checkout (Verifone). Pagesa është e sigurt dhe e mbrojtur.</p>
             </div>
             <div class="faq-item">
                 <h3>Kush i mirëmban ligjet në sistem?</h3>
@@ -190,5 +190,33 @@
             <a href="/app">Bisedë</a>
         </p>
     </footer>
+
+    <script>
+        var AUTH_TOKEN_KEY = 'albanian_law_ai_token';
+        function getToken() { return localStorage.getItem(AUTH_TOKEN_KEY); }
+
+        async function startPremiumCheckout() {
+            var token = getToken();
+            if (!token) { window.location.href = '/login?redirect=/pricing'; return; }
+            var btn = document.getElementById('premiumBtn');
+            var origText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Duke u drejtuar te 2Checkout...';
+            try {
+                var res = await fetch('/api/billing/create-checkout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                });
+                var data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Gabim');
+                if (data.url) window.location.href = data.url;
+                else throw new Error('No checkout URL');
+            } catch (err) {
+                alert(err.message || 'Gabim gjatë krijimit të sesionit.');
+                btn.disabled = false;
+                btn.textContent = origText;
+            }
+        }
+    </script>
 </body>
 </html>

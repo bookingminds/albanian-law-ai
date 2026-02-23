@@ -59,6 +59,13 @@ from backend.file_storage import (
     delete_file as storage_delete, storage_path_for_doc,
     check_storage_health, list_bucket_files,
 )
+from backend.billing import (
+    build_checkout_url, verify_ipn_signature, build_ipn_response,
+    parse_ipn_body, process_ipn, get_billing_status, twoco_configured,
+)
+from backend.database import (
+    update_user_billing, expire_user_trial,
+)
 
 
 def _resolve_storage_path(doc: dict) -> str:
@@ -129,17 +136,20 @@ async def global_exception_handler(request: Request, exc: Exception):
         logger.error(f"Unhandled error on {request.url.path}: {exc}")
         return JSONResponse(
             status_code=500,
-            content={"detail": "Internal server error", "error": str(exc)},
+            content={"detail": "Internal server error"},
         )
     raise exc
 
 
-_cors_origins = list({
+_cors_origins = [o for o in {
     settings.FRONTEND_URL,
     settings.SERVER_URL,
     "http://localhost:8000",
     "http://localhost:3000",
-})
+} if o]
+if settings.SERVER_URL and settings.SERVER_URL != "http://localhost:8000":
+    _cors_origins = [o for o in _cors_origins
+                     if "localhost" not in o]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -404,6 +414,10 @@ async def auth_me(user: dict = Depends(get_current_user)):
                 trial_hours_left = max(0, int(delta.total_seconds() / 3600))
         except Exception:
             pass
+    is_premium = bool(user.get("is_premium"))
+    billing_status = user.get("subscription_status") or ""
+    has_active_billing = is_premium and billing_status in ("active", "trialing")
+
     return {
         "user": {
             "id": user["id"],
@@ -412,6 +426,11 @@ async def auth_me(user: dict = Depends(get_current_user)):
         },
         "subscription": sub,
         "subscription_price_eur": SUBSCRIPTION_PRICE_EUR,
+        "billing": {
+            "is_premium": is_premium,
+            "subscription_status": billing_status,
+            "active": has_active_billing,
+        },
         "trial": {
             "trial_ends_at": str(trial_ends_at) if trial_ends_at else None,
             "trial_used_at": str(trial_used_at) if trial_used_at else None,
@@ -420,6 +439,7 @@ async def auth_me(user: dict = Depends(get_current_user)):
             "trial_hours_left": trial_hours_left,
             "trial_days": settings.TRIAL_DAYS,
         },
+        "payments_configured": twoco_configured(),
     }
 
 
@@ -549,6 +569,95 @@ async def restore_purchase(user: dict = Depends(get_current_user)):
     if sub and sub["status"] in ("active", "trialing"):
         return {"restored": True, "status": sub["status"], "current_period_end": str(sub["current_period_end"]) if sub.get("current_period_end") else ""}
     return {"restored": False, "message": "Nuk u gjet asnjë abonim aktiv."}
+
+
+# ── 2Checkout Billing API (web payments) ──────────────────────
+
+@app.post("/api/billing/create-checkout")
+async def billing_create_checkout(user: dict = Depends(get_current_user)):
+    """Build a 2Checkout hosted checkout URL and return it."""
+    if not twoco_configured():
+        raise HTTPException(
+            status_code=501,
+            detail="Pagesat nuk janë konfiguruar ende.",
+        )
+    try:
+        url = build_checkout_url(user["id"], user["email"])
+        return {"url": url}
+    except Exception as e:
+        logger.error(f"2Checkout checkout URL failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Gabim gjatë krijimit të sesionit: {str(e)[:200]}")
+
+
+@app.post("/api/2checkout/webhook")
+async def twoco_webhook(request: Request):
+    """2Checkout IPN webhook — form-encoded POST, HMAC-MD5 signature.
+
+    No auth required: called server-to-server by 2Checkout.
+    Must return the <EPAYMENT>DATE|HASH</EPAYMENT> acknowledgement.
+    """
+    raw_body = await request.body()
+    secret = settings.TWOCO_IPN_SECRET or settings.TWOCO_SECRET_KEY
+
+    if not secret:
+        logger.error("IPN received but no TWOCO_IPN_SECRET / TWOCO_SECRET_KEY configured")
+        return Response(content="no secret configured", status_code=500)
+
+    if not verify_ipn_signature(raw_body, secret):
+        logger.warning("IPN signature verification FAILED")
+        return Response(content="invalid signature", status_code=403)
+
+    data = parse_ipn_body(raw_body)
+    try:
+        result = await process_ipn(data)
+        logger.info(f"IPN processed: {result}")
+    except Exception as e:
+        logger.error(f"IPN processing error: {e}")
+
+    ack = build_ipn_response(secret)
+    return Response(content=ack, media_type="text/xml")
+
+
+@app.get("/api/billing/status")
+async def billing_status_endpoint(user: dict = Depends(get_current_user)):
+    """Return full billing state for the authenticated user."""
+    return await get_billing_status(user["id"])
+
+
+@app.get("/api/billing/config")
+async def billing_config():
+    """Public: return pricing info and whether payments are configured."""
+    return {
+        "payments_configured": twoco_configured(),
+        "price_eur": settings.SUBSCRIPTION_PRICE_EUR,
+        "sandbox": settings.TWOCO_SANDBOX,
+    }
+
+
+@app.post("/api/admin/expire-trial")
+async def admin_expire_trial(request: Request, user: dict = Depends(require_admin)):
+    """DEBUG: Force-expire a user's trial so paywall kicks in immediately."""
+    body = await request.json()
+    target_email = body.get("email", "").strip().lower()
+    target_user_id = body.get("user_id")
+
+    if target_email:
+        target = await get_user_by_email(target_email)
+    elif target_user_id:
+        target = await get_user_by_id(int(target_user_id))
+    else:
+        raise HTTPException(status_code=400, detail="Provide 'email' or 'user_id'.")
+
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    await expire_user_trial(target["id"])
+    logger.info(f"Admin {user['email']} force-expired trial for user {target['id']} ({target['email']})")
+    return {
+        "ok": True,
+        "message": f"Trial expired for {target['email']}. User will see paywall on next request.",
+        "user_id": target["id"],
+    }
 
 
 # ── User Document API (admin only for management) ─────────────

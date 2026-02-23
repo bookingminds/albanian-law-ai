@@ -64,9 +64,25 @@ async def init_db():
                 trial_ends_at TIMESTAMPTZ,
                 trial_used_at TIMESTAMPTZ,
                 signup_ip TEXT,
+                stripe_customer_id TEXT,
+                stripe_subscription_id TEXT,
+                is_premium BOOLEAN DEFAULT FALSE,
+                subscription_status TEXT DEFAULT '',
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        for col, coltype, default in [
+            ("stripe_customer_id", "TEXT", "NULL"),
+            ("stripe_subscription_id", "TEXT", "NULL"),
+            ("is_premium", "BOOLEAN", "FALSE"),
+            ("subscription_status", "TEXT", "''"),
+        ]:
+            try:
+                await conn.execute(
+                    f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {coltype} DEFAULT {default}"
+                )
+            except Exception:
+                pass
 
         # ── Documents ──
         await conn.execute("""
@@ -699,6 +715,39 @@ async def set_trial_used_on_subscription(user_id: int):
         await conn.execute(
             "UPDATE users SET trial_used_at = COALESCE(trial_used_at, $1) WHERE id = $2",
             datetime.utcnow(), user_id,
+        )
+
+
+# ── Billing helpers ───────────────────────────────────────────
+
+async def update_user_billing(user_id: int, *,
+                               is_premium: bool = None,
+                               subscription_status: str = None):
+    parts, values = [], []
+    idx = 1
+    if is_premium is not None:
+        parts.append(f"is_premium = ${idx}"); values.append(is_premium); idx += 1
+    if subscription_status is not None:
+        parts.append(f"subscription_status = ${idx}"); values.append(subscription_status); idx += 1
+    if not parts:
+        return
+    values.append(user_id)
+    pool = await _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE users SET {', '.join(parts)} WHERE id = ${idx}",
+            *values,
+        )
+
+
+async def expire_user_trial(user_id: int):
+    """Force-expire a user's trial (for admin debug testing)."""
+    pool = await _get_pool()
+    now = datetime.utcnow()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET trial_ends_at = $1, trial_used_at = $2 WHERE id = $3",
+            now, now, user_id,
         )
 
 
