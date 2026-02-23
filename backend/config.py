@@ -16,9 +16,9 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "gpt-4o-mini"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
 
-    # Chunking
-    CHUNK_SIZE: int = 1400
-    CHUNK_OVERLAP: int = 200
+    # Chunking (LangChain RecursiveCharacterTextSplitter)
+    CHUNK_SIZE: int = 800
+    CHUNK_OVERLAP: int = 100
 
     # RAG — retrieval
     TOP_K_RESULTS: int = 10

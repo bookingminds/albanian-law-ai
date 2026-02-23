@@ -125,12 +125,19 @@ async def init_db():
                 chunk_index INTEGER NOT NULL,
                 content TEXT NOT NULL,
                 article TEXT,
+                section_title TEXT DEFAULT '',
                 pages TEXT,
                 page_start INTEGER,
                 page_end INTEGER,
                 char_count INTEGER DEFAULT 0
             )
         """)
+        try:
+            await conn.execute(
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS section_title TEXT DEFAULT ''"
+            )
+        except Exception:
+            pass
 
         # ── Chat Messages ──
         await conn.execute("""
@@ -413,6 +420,7 @@ async def insert_chunks(document_id: int, user_id: int, chunks: list[dict]):
             records.append((
                 document_id, user_id, c.get("chunk_index", 0),
                 c["text"], c.get("article") or "",
+                c.get("section_title") or "",
                 pages_str,
                 min(page_list) if page_list else 0,
                 max(page_list) if page_list else 0,
@@ -421,8 +429,8 @@ async def insert_chunks(document_id: int, user_id: int, chunks: list[dict]):
         await conn.executemany(
             """INSERT INTO document_chunks
                (document_id, user_id, chunk_index, content, article,
-                pages, page_start, page_end, char_count)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+                section_title, pages, page_start, page_end, char_count)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
             records,
         )
 

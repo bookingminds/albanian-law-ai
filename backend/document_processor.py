@@ -157,24 +157,31 @@ def extract_metadata(full_text: str) -> dict:
     return metadata
 
 
-# ── Chunking (3-tier hybrid) ──────────────────────────────────
+# ── LangChain Chunking ────────────────────────────────────────
 #
-# Tier 1: Split on legal article boundaries  (Neni X)
-# Tier 2: Split long articles by paragraphs  (\n\n)
-# Tier 3: Size-based split as last resort    (sentence/word)
+# Uses RecursiveCharacterTextSplitter with Albanian legal separators:
+#   \nNeni  — article boundaries
+#   \nKreu  — chapter boundaries
+#   \nPika  — sub-article point boundaries
+#   \n\n    — paragraph breaks
+#   \n      — line breaks
+#   .       — sentence boundaries
+#   " "     — word boundaries (last resort)
 #
-# Invariant: every chunk keeps its article number, accurate pages,
-#            and is between MIN_CHUNK_LEN and ~chunk_size chars.
+# Each chunk gets: article number, section_title, page numbers.
 
-_MIN_CHUNK_LEN = 40
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+ALBANIAN_LEGAL_SEPARATORS = [
+    "\nNeni ", "\nKREU ", "\nKreu ", "\nPika ",
+    "\n\n", "\n", ". ", " ",
+]
+
+_MIN_CHUNK_LEN = 30
 
 
 def _build_page_index(pages: list[dict]) -> tuple[str, list[tuple[int, int, int]]]:
-    """Combine page texts and build a sorted offset→page lookup.
-
-    Returns (combined_text, spans) where spans is a sorted list of
-    (start_offset, end_offset, page_number) for binary-search lookups.
-    """
+    """Combine page texts and build a sorted offset-to-page lookup."""
     parts: list[str] = []
     spans: list[tuple[int, int, int]] = []
     offset = 0
@@ -182,7 +189,7 @@ def _build_page_index(pages: list[dict]) -> tuple[str, list[tuple[int, int, int]
         text = p["text"]
         spans.append((offset, offset + len(text), p["page"]))
         parts.append(text)
-        offset += len(text) + 2          # +2 for the "\n\n" joiner
+        offset += len(text) + 2
     combined = "\n\n".join(parts)
     return combined, spans
 
@@ -199,194 +206,95 @@ def _pages_for_span(start: int, end: int,
     return sorted(result) if result else [1]
 
 
-def _split_article_by_paragraphs(text: str, chunk_size: int,
-                                  overlap: int) -> list[str]:
-    """Tier 2: split a long article into paragraph-aligned chunks.
-
-    Paragraphs (separated by blank lines) are accumulated until adding
-    the next paragraph would exceed chunk_size.  If a single paragraph
-    is still too long, Tier 3 (_split_by_size) handles it.
-    """
-    paragraphs = re.split(r'\n\s*\n', text)
-    paragraphs = [p.strip() for p in paragraphs if p.strip()]
-
-    if len(paragraphs) <= 1:
-        return _split_by_size(text, chunk_size, overlap)
-
-    chunks: list[str] = []
-    buffer: list[str] = []
-    buf_len = 0
-
-    def flush():
-        nonlocal buffer, buf_len
-        if not buffer:
-            return
-        joined = "\n\n".join(buffer)
-        if len(joined) > chunk_size * 1.5:
-            chunks.extend(_split_by_size(joined, chunk_size, overlap))
-        elif len(joined) >= _MIN_CHUNK_LEN:
-            chunks.append(joined)
-        buffer = []
-        buf_len = 0
-
-    for para in paragraphs:
-        para_len = len(para)
-
-        if para_len > chunk_size * 1.5:
-            flush()
-            chunks.extend(_split_by_size(para, chunk_size, overlap))
-            continue
-
-        would_be = buf_len + para_len + (2 if buffer else 0)
-        if would_be > chunk_size and buffer:
-            flush()
-
-        buffer.append(para)
-        buf_len += para_len + (2 if len(buffer) > 1 else 0)
-
-    flush()
-
-    if overlap > 0 and len(chunks) > 1:
-        chunks = _add_overlap(chunks, overlap)
-
-    return chunks
+def _detect_section_title(text: str) -> str:
+    """Extract a section title from chunk text (Neni X, Kreu X, etc.)."""
+    patterns = [
+        (r'[Nn]eni\s+(\d+[\w]*)', 'Neni'),
+        (r'[Kk][Rr][Ee][Uu]\s+([IVXLCDM]+|\d+)', 'Kreu'),
+        (r'[Pp]ika\s+(\d+)', 'Pika'),
+        (r'[Ss]eksioni\s+([IVXLCDM]+|\d+)', 'Seksioni'),
+    ]
+    for pattern, prefix in patterns:
+        match = re.search(pattern, text[:200])
+        if match:
+            return f"{prefix} {match.group(1)}"
+    return ""
 
 
-def _add_overlap(chunks: list[str], overlap: int) -> list[str]:
-    """Prepend up to `overlap` chars from the previous chunk's tail."""
-    result = [chunks[0]]
-    for i in range(1, len(chunks)):
-        prev_tail = chunks[i - 1][-overlap:]
-        nl = prev_tail.find('\n')
-        if nl != -1:
-            prev_tail = prev_tail[nl + 1:]
-        if prev_tail.strip():
-            result.append(prev_tail.strip() + "\n\n" + chunks[i])
-        else:
-            result.append(chunks[i])
-    return result
+def _detect_article_number(text: str) -> str | None:
+    """Extract article number (Neni X) from chunk text."""
+    match = re.search(r'[Nn]eni\s+(\d+)', text[:200])
+    return match.group(1) if match else None
 
 
 def chunk_text_by_articles(pages: list[dict], chunk_size: int = None,
                            chunk_overlap: int = None) -> list[dict]:
-    """Hybrid 3-tier chunking that preserves semantic integrity.
+    """Split document into chunks using LangChain RecursiveCharacterTextSplitter.
 
-    Tier 1 – Article boundaries:  split on "Neni \\d+"
-    Tier 2 – Paragraph grouping:  accumulate \\n\\n-separated paragraphs
-    Tier 3 – Size-based fallback:  sentence → word boundary splitting
+    Separators are tuned for Albanian legal documents: article, chapter,
+    point, paragraph, sentence, and word boundaries.
     """
     chunk_size = chunk_size or settings.CHUNK_SIZE
     chunk_overlap = chunk_overlap or settings.CHUNK_OVERLAP
 
     combined_text, page_spans = _build_page_index(pages)
 
-    # ── Tier 1: split on article boundaries ───────────────
-    article_pattern = r'(?=\b[Nn]eni\s+\d+)'
-    article_splits = re.split(article_pattern, combined_text)
-    article_splits = [s for s in article_splits if s.strip()]
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=ALBANIAN_LEGAL_SEPARATORS,
+        keep_separator=True,
+        length_function=len,
+        is_separator_regex=False,
+    )
 
-    use_articles = len(article_splits) > 1
+    raw_chunks = splitter.split_text(combined_text)
 
     chunks: list[dict] = []
+    search_start = 0
 
-    if use_articles:
-        cursor = 0
-        for split_text in article_splits:
-            start_pos = combined_text.find(split_text, cursor)
-            if start_pos == -1:
-                start_pos = cursor
+    for idx, chunk_text in enumerate(raw_chunks):
+        if len(chunk_text.strip()) < _MIN_CHUNK_LEN:
+            continue
 
-            article_match = re.match(r'[Nn]eni\s+(\d+)', split_text.strip())
-            article_num = article_match.group(1) if article_match else None
+        pos = combined_text.find(chunk_text[:80], max(search_start - 50, 0))
+        if pos == -1:
+            pos = search_start
 
-            if len(split_text.strip()) > chunk_size:
-                sub_texts = _split_article_by_paragraphs(
-                    split_text.strip(), chunk_size, chunk_overlap
-                )
-            else:
-                sub_texts = [split_text.strip()] if len(split_text.strip()) >= _MIN_CHUNK_LEN else []
+        pg = _pages_for_span(pos, pos + len(chunk_text), page_spans)
+        article = _detect_article_number(chunk_text)
+        section = _detect_section_title(chunk_text)
 
-            sub_offset = start_pos
-            for st in sub_texts:
-                local_start = combined_text.find(st[:80], max(sub_offset - 20, 0))
-                if local_start == -1:
-                    local_start = sub_offset
-                pg = _pages_for_span(local_start, local_start + len(st), page_spans)
-                chunks.append({
-                    "text": st,
-                    "article": article_num,
-                    "pages": pg,
-                    "chunk_index": len(chunks),
-                })
-                sub_offset = local_start + len(st)
+        chunks.append({
+            "text": chunk_text.strip(),
+            "article": article,
+            "section_title": section,
+            "pages": pg,
+            "chunk_index": len(chunks),
+        })
 
-            cursor = start_pos + len(split_text)
-    else:
-        sub_texts = _split_article_by_paragraphs(
-            combined_text, chunk_size, chunk_overlap
-        )
-        for st in sub_texts:
-            pos = combined_text.find(st[:80])
-            pg = _pages_for_span(max(pos, 0), max(pos, 0) + len(st), page_spans)
-            chunks.append({
-                "text": st,
-                "article": None,
-                "pages": pg,
-                "chunk_index": len(chunks),
-            })
+        search_start = pos + len(chunk_text) - chunk_overlap
 
+    # ── Logging ──
     logger.info(
-        f"Chunking complete: {len(chunks)} chunks "
-        f"(target size: {chunk_size}, overlap: {chunk_overlap}, "
-        f"articles_detected: {use_articles})"
+        f"LangChain chunking complete: {len(chunks)} chunks "
+        f"(chunk_size={chunk_size}, overlap={chunk_overlap}, "
+        f"separators={len(ALBANIAN_LEGAL_SEPARATORS)})"
     )
     sizes = [len(c["text"]) for c in chunks]
     if sizes:
         logger.info(
-            f"Chunk sizes: min={min(sizes)}, max={max(sizes)}, "
-            f"avg={sum(sizes) // len(sizes)}"
+            f"Chunk stats: count={len(sizes)}, "
+            f"min={min(sizes)}, max={max(sizes)}, "
+            f"avg={sum(sizes) // len(sizes)}, "
+            f"total_chars={sum(sizes)}"
         )
-
-    return chunks
-
-
-def _split_by_size(text: str, chunk_size: int, overlap: int) -> list[str]:
-    """Tier 3: size-based splitting that respects sentence boundaries.
-
-    Boundary preference order: paragraph break → sentence end → word break.
-    """
-    chunks: list[str] = []
-    start = 0
-    text_len = len(text)
-
-    while start < text_len:
-        end = start + chunk_size
-
-        if end < text_len:
-            search_lo = start + chunk_size // 2
-            # Prefer paragraph boundary
-            pos = text.rfind('\n\n', search_lo, end + 100)
-            if pos > start:
-                end = pos
-            else:
-                # Prefer sentence boundary
-                pos = text.rfind('. ', search_lo, end + 50)
-                if pos > start:
-                    end = pos + 1
-                else:
-                    # Fall back to word boundary
-                    pos = text.rfind(' ', search_lo, end + 20)
-                    if pos > start:
-                        end = pos
-
-        chunk = text[start:end].strip()
-        if chunk and len(chunk) >= _MIN_CHUNK_LEN:
-            chunks.append(chunk)
-
-        next_start = end - overlap
-        if next_start <= start:
-            next_start = end
-        start = next_start
+    articles_found = sum(1 for c in chunks if c["article"])
+    sections_found = sum(1 for c in chunks if c["section_title"])
+    logger.info(
+        f"Metadata: {articles_found} chunks with article numbers, "
+        f"{sections_found} chunks with section titles"
+    )
 
     return chunks
 
