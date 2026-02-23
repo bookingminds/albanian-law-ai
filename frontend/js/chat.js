@@ -5,6 +5,21 @@
 
 const API = '';
 let sessionId = generateSessionId();
+
+async function viewSourcePdf(docId, page) {
+    try {
+        const token = typeof getToken === 'function' ? getToken() : null;
+        const res = await fetch(`/api/user/documents/${docId}/pdf`, {
+            headers: token ? { 'Authorization': 'Bearer ' + token } : {}
+        });
+        if (!res.ok) throw new Error('PDF jo i disponueshëm');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        window.open(url + '#page=' + page, '_blank');
+    } catch (e) {
+        if (typeof showToast === 'function') showToast(e.message, 'error');
+    }
+}
 let isLoading = false;
 let selectedDocId = null;
 let userDocuments = [];
@@ -530,7 +545,7 @@ function renderSources(sources, allSources) {
         let viewBtn = '';
         const page = s.page || (pagesList.length ? pagesList[0] : '');
         if (s.document_id && page && window._isAdmin) {
-            viewBtn = `<button class="btn-view-source" onclick="window.open('/api/user/documents/${s.document_id}/pdf?token='+getToken()+'#page=${parseInt(page)||1}','_blank')">Shiko PDF</button>`;
+            viewBtn = `<button class="btn-view-source" onclick="viewSourcePdf('${s.document_id}', ${parseInt(page)||1})">Shiko PDF</button>`;
         }
 
         const countHint = chunkCount > 1

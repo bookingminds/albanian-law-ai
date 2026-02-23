@@ -501,7 +501,7 @@ async def _coverage_check_iteration(
     """
     try:
         check_resp = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=settings.LLM_MODEL,
             messages=[
                 {"role": "system",
                  "content": "Kontrollo mbulimin e përgjigjes juridike."},

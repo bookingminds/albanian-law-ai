@@ -60,6 +60,7 @@
     <div class="toast-container" id="toastContainer"></div>
 
     <script src="/static/js/auth.js"></script>
+    <script src="/static/js/utils.js"></script>
     <script>
         const API = '';
 
@@ -174,8 +175,16 @@
             } catch (e) { showToast(e.message, 'error'); }
         }
 
-        function viewPdf(id) {
-            window.open(API + '/api/user/documents/' + id + '/pdf?token=' + getToken(), '_blank');
+        async function viewPdf(id) {
+            try {
+                const res = await fetch(API + '/api/user/documents/' + id + '/pdf', {
+                    headers: authHeaders()
+                });
+                if (!res.ok) throw new Error('Failed to load PDF');
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                window.open(url, '_blank');
+            } catch (e) { showToast(e.message, 'error'); }
         }
 
         async function retryDok(id) {
@@ -220,15 +229,6 @@
             const d = document.createElement('div');
             d.textContent = s;
             return d.innerHTML;
-        }
-
-        function showToast(message, type) {
-            const container = document.getElementById('toastContainer');
-            const toast = document.createElement('div');
-            toast.className = 'toast toast-' + type;
-            toast.textContent = message;
-            container.appendChild(toast);
-            setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3500);
         }
 
         loadDocs();

@@ -28,10 +28,13 @@ def is_disposable_email(email: str) -> bool:
     if not email or "@" not in email:
         return False
     domain = email.strip().lower().split("@")[-1]
-    # Strip subdomains for some known patterns (e.g. xxx.mailinator.com)
-    if "." in domain:
-        domain = domain.split(".")[-2] + "." + domain.split(".")[-1]
-    return domain in DISPOSABLE_EMAIL_DOMAINS
+    if domain in DISPOSABLE_EMAIL_DOMAINS:
+        return True
+    parts = domain.split(".")
+    if len(parts) > 2:
+        parent = ".".join(parts[-2:])
+        return parent in DISPOSABLE_EMAIL_DOMAINS
+    return False
 
 
 def get_client_ip(request) -> str:

@@ -1564,13 +1564,12 @@ async def admin_delete_suggested_question(qid: int, user: dict = Depends(require
 
 
 @app.post("/api/admin/promote")
-async def promote_to_admin(request: Request):
-    """One-time admin promotion secured by JWT_SECRET."""
+async def promote_to_admin(request: Request, admin: dict = Depends(require_admin)):
+    """Promote a user to admin. Requires existing admin auth."""
     body = await request.json()
-    secret = body.get("secret", "")
     email = body.get("email", "").strip().lower()
-    if not email or secret != settings.JWT_SECRET:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
     pool = await _get_pool()
     async with pool.acquire() as conn:
         await conn.execute("UPDATE users SET is_admin = TRUE WHERE email = $1", email)

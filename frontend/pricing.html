@@ -191,10 +191,8 @@
         </p>
     </footer>
 
+    <script src="/static/js/auth.js"></script>
     <script>
-        var AUTH_TOKEN_KEY = 'albanian_law_ai_token';
-        function getToken() { return localStorage.getItem(AUTH_TOKEN_KEY); }
-
         async function startPremiumCheckout() {
             var token = getToken();
             if (!token) { window.location.href = '/login?redirect=/pricing'; return; }
