@@ -204,9 +204,7 @@ async def init_db():
         if count == 0:
             seed_questions = [
                 ("Parimet themelore", "Cili është qëllimi i procedimit penal?", 1),
-                ("Parimet themelore", "Çfarë garanton Kodi për të drejtat e njeriut?", 2),
-                ("Parimet themelore", "Çfarë do të thotë prezumimi i pafajësisë?", 3),
-                ("Parimet themelore", "Kur një person konsiderohet fajtor ligjërisht?", 4),
+                ("Parimet themelore", "Çfarë do të thotë prezumimi i pafajësisë?", 2),
                 ("Parimet themelore", "A lejohet gjykimi i një personi dy herë për të njëjtën vepër?", 5),
                 ("Gjykatat dhe juridiksioni", "Cilat janë gjykatat që shqyrtojnë çështjet penale?", 1),
                 ("Gjykatat dhe juridiksioni", "Si përcaktohet kompetenca territoriale e gjykatës?", 2),
@@ -238,8 +236,7 @@ async def init_db():
                 ("Hetimi paraprak", "Sa zgjat hetimi paraprak?", 3),
                 ("Hetimi paraprak", "Kur pushohet hetimi?", 4),
                 ("Hetimi paraprak", "Kur çështja kalon për gjykim?", 5),
-                ("Gjykimi", "Si zhvillohet gjykimi penal?", 1),
-                ("Gjykimi", "Cilat janë fazat e gjykimit?", 2),
+                ("Gjykimi", "Cilat janë fazat e gjykimit?", 1),
                 ("Gjykimi", "Si paraqiten provat në gjykatë?", 3),
                 ("Gjykimi", "Kur jepet vendimi?", 4),
                 ("Gjykimi", "Çfarë përmban vendimi penal?", 5),
@@ -249,10 +246,8 @@ async def init_db():
                 ("Mjetet e ankimit", "Brenda çfarë afati bëhet ankimi?", 4),
                 ("Mjetet e ankimit", "Çfarë ndodh pas pranimit të ankimit?", 5),
                 ("Ekzekutimi i vendimit", "Si ekzekutohet një vendim penal?", 1),
-                ("Ekzekutimi i vendimit", "Cili institucion zbaton vendimin?", 2),
-                ("Ekzekutimi i vendimit", "Kur fillon dënimi?", 3),
-                ("Ekzekutimi i vendimit", "A mund të pezullohet ekzekutimi i vendimit?", 4),
-                ("Ekzekutimi i vendimit", "Si trajtohen rastet e faljes ose amnistisë?", 5),
+                ("Ekzekutimi i vendimit", "Kur fillon dënimi?", 2),
+                ("Ekzekutimi i vendimit", "A mund të pezullohet ekzekutimi i vendimit?", 3),
             ]
             await conn.executemany(
                 "INSERT INTO suggested_questions (category, question, sort_order) "
