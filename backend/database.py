@@ -199,13 +199,14 @@ async def init_db():
             ON document_chunks USING GIN (to_tsvector('simple', content))
         """)
 
-        # ── Seed suggested questions (Kodi i Procedurës Penale) ──
+        # ── Seed suggested questions ──
         count = await conn.fetchval("SELECT COUNT(*) FROM suggested_questions")
         if count == 0:
             seed_questions = [
+                # ── Kodi i Procedurës Penale ──
                 ("Parimet themelore", "Cili është qëllimi i procedimit penal?", 1),
                 ("Parimet themelore", "Çfarë do të thotë prezumimi i pafajësisë?", 2),
-                ("Parimet themelore", "A lejohet gjykimi i një personi dy herë për të njëjtën vepër?", 5),
+                ("Parimet themelore", "A lejohet gjykimi i një personi dy herë për të njëjtën vepër?", 3),
                 ("Gjykatat dhe juridiksioni", "Cilat janë gjykatat që shqyrtojnë çështjet penale?", 1),
                 ("Gjykatat dhe juridiksioni", "Si përcaktohet kompetenca territoriale e gjykatës?", 2),
                 ("Gjykatat dhe juridiksioni", "Kur gjykon një gjyqtar i vetëm?", 3),
@@ -237,9 +238,9 @@ async def init_db():
                 ("Hetimi paraprak", "Kur pushohet hetimi?", 4),
                 ("Hetimi paraprak", "Kur çështja kalon për gjykim?", 5),
                 ("Gjykimi", "Cilat janë fazat e gjykimit?", 1),
-                ("Gjykimi", "Si paraqiten provat në gjykatë?", 3),
-                ("Gjykimi", "Kur jepet vendimi?", 4),
-                ("Gjykimi", "Çfarë përmban vendimi penal?", 5),
+                ("Gjykimi", "Si paraqiten provat në gjykatë?", 2),
+                ("Gjykimi", "Kur jepet vendimi?", 3),
+                ("Gjykimi", "Çfarë përmban vendimi penal?", 4),
                 ("Mjetet e ankimit", "Çfarë është ankimi në apel?", 1),
                 ("Mjetet e ankimit", "Kur mund të bëhet rekurs në Gjykatën e Lartë?", 2),
                 ("Mjetet e ankimit", "Kush ka të drejtë të ankimojë vendimin?", 3),
@@ -248,6 +249,36 @@ async def init_db():
                 ("Ekzekutimi i vendimit", "Si ekzekutohet një vendim penal?", 1),
                 ("Ekzekutimi i vendimit", "Kur fillon dënimi?", 2),
                 ("Ekzekutimi i vendimit", "A mund të pezullohet ekzekutimi i vendimit?", 3),
+                # ── Ligji për Nëpunësin Civil ──
+                ("Dispozita të Përgjithshme", "Cili është qëllimi i ligjit për nëpunësin civil?", 1),
+                ("Dispozita të Përgjithshme", "Çfarë rregullon marrëdhënia e shërbimit civil?", 2),
+                ("Dispozita të Përgjithshme", "Për kë zbatohet ky ligj në administratën publike?", 3),
+                ("Dispozita të Përgjithshme", "Cilat kategori përjashtohen nga zbatimi i ligjit?", 4),
+                ("Dispozita të Përgjithshme", "Çfarë kuptimi ka termi 'nëpunës civil'?", 5),
+                ("Administrimi i Shërbimit Civil", "Cilat janë parimet e administrimit të shërbimit civil?", 1),
+                ("Administrimi i Shërbimit Civil", "Çfarë roli ka Departamenti i Administratës Publike?", 2),
+                ("Administrimi i Shërbimit Civil", "Çfarë funksioni ka ASPA?", 3),
+                ("Administrimi i Shërbimit Civil", "Si organizohet njësia e burimeve njerëzore?", 4),
+                ("Administrimi i Shërbimit Civil", "Cilat janë detyrat e Komisionerit të Shërbimit Civil?", 5),
+                ("Dosjet dhe Planifikimi", "Çfarë përmban dosja individuale e nëpunësit civil?", 1),
+                ("Dosjet dhe Planifikimi", "Çfarë është regjistri qendror i personelit?", 2),
+                ("Dosjet dhe Planifikimi", "Si bëhet planifikimi i rekrutimit në shërbimin civil?", 3),
+                ("Klasifikimi i Pozicioneve", "Si klasifikohen pozicionet në shërbimin civil?", 1),
+                ("Klasifikimi i Pozicioneve", "Cilat janë kategoritë e nëpunësve civilë?", 2),
+                ("Klasifikimi i Pozicioneve", "Çfarë përfshin kategoria e lartë drejtuese?", 3),
+                ("Pranimi në Shërbimin Civil", "Cilat janë kërkesat për t'u bërë nëpunës civil?", 1),
+                ("Pranimi në Shërbimin Civil", "Si zhvillohet konkursi për nëpunës civil?", 2),
+                ("Pranimi në Shërbimin Civil", "Si bëhet vlerësimi i kandidatëve?", 3),
+                ("Pranimi në Shërbimin Civil", "Sa zgjat lista e fituesve?", 4),
+                ("Pranimi në Shërbimin Civil", "Çfarë është periudha e provës?", 5),
+                ("Lëvizja dhe Ngritja në Detyrë", "Çfarë është lëvizja paralele?", 1),
+                ("Lëvizja dhe Ngritja në Detyrë", "Si bëhet ngritja në detyrë?", 2),
+                ("Lëvizja dhe Ngritja në Detyrë", "Si plotësohen vendet e lira në administratë?", 3),
+                ("Të Drejtat e Nëpunësit Civil", "Cilat janë të drejtat kryesore të nëpunësit civil?", 1),
+                ("Të Drejtat e Nëpunësit Civil", "Si përbëhet paga e nëpunësit civil?", 2),
+                ("Të Drejtat e Nëpunësit Civil", "A ka të drejtë nëpunësi civil të bëjë grevë?", 3),
+                ("Të Drejtat e Nëpunësit Civil", "A ka të drejtë nëpunësi civil të marrë pjesë në politikë?", 4),
+                ("Detyrimet", "Cilat janë detyrimet e nëpunësit civil në punë?", 1),
             ]
             await conn.executemany(
                 "INSERT INTO suggested_questions (category, question, sort_order) "
