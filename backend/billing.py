@@ -74,6 +74,9 @@ async def create_order(user_id: int, email: str) -> str:
 
     price = f"{settings.SUBSCRIPTION_PRICE_EUR:.2f}"
 
+    return_url = f"{settings.SERVER_URL}/api/billing/capture"
+    cancel_url = f"{settings.SERVER_URL}/pricing?cancelled=true"
+
     payload = {
         "intent": "CAPTURE",
         "purchase_units": [
@@ -86,14 +89,21 @@ async def create_order(user_id: int, email: str) -> str:
                 "custom_id": f"user_{user_id}",
             }
         ],
-        "application_context": {
-            "brand_name": "Albanian Law AI",
-            "shipping_preference": "NO_SHIPPING",
-            "user_action": "PAY_NOW",
-            "return_url": f"{settings.SERVER_URL}/api/billing/capture",
-            "cancel_url": f"{settings.SERVER_URL}/pricing?cancelled=true",
+        "payment_source": {
+            "paypal": {
+                "experience_context": {
+                    "brand_name": "Albanian Law AI",
+                    "locale": "sq-AL",
+                    "shipping_preference": "NO_SHIPPING",
+                    "user_action": "PAY_NOW",
+                    "return_url": return_url,
+                    "cancel_url": cancel_url,
+                }
+            }
         },
     }
+
+    logger.info(f"Creating PayPal order: {price} EUR, return_url={return_url}")
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         resp = await client.post(
@@ -103,17 +113,16 @@ async def create_order(user_id: int, email: str) -> str:
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "Prefer": "return=representation",
             },
         )
         if resp.status_code >= 400:
-            logger.error(f"PayPal order error: {resp.status_code} {resp.text}")
+            logger.error(f"PayPal order API error: {resp.status_code} {resp.text}")
         resp.raise_for_status()
         data = resp.json()
 
     approval_url = ""
     for link in data.get("links", []):
-        if link.get("rel") == "approve":
+        if link.get("rel") in ("approve", "payer-action"):
             approval_url = link["href"]
             break
 
