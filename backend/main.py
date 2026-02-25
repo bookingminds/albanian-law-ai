@@ -1602,7 +1602,19 @@ async def health_check():
     except Exception as e:
         db_status = f"error: {e}"
     storage = await check_storage_health()
-    return {"status": "ok", "db": db_status, "storage": storage.get("status", "unknown")}
+    return {
+        "status": "ok",
+        "db": db_status,
+        "storage": storage.get("status", "unknown"),
+        "paypal_env": {
+            "client_id_set": bool(os.environ.get("PAYPAL_CLIENT_ID")),
+            "secret_set": bool(os.environ.get("PAYPAL_CLIENT_SECRET")),
+            "plan_id_set": bool(os.environ.get("PAYPAL_PLAN_ID")),
+            "webhook_id_set": bool(os.environ.get("PAYPAL_WEBHOOK_ID")),
+            "settings_client_id": bool(settings.PAYPAL_CLIENT_ID),
+            "settings_plan_id": bool(settings.PAYPAL_PLAN_ID),
+        },
+    }
 
 
 @app.get("/api/health/detailed")
