@@ -61,8 +61,8 @@ from backend.file_storage import (
     check_storage_health, list_bucket_files,
 )
 from backend.billing import (
-    create_order, capture_order, verify_webhook_signature,
-    process_webhook_event, get_billing_status, paypal_configured,
+    create_checkout_url, process_callback, verify_callback,
+    get_billing_status, paysera_configured,
 )
 from backend.database import (
     update_user_billing, expire_user_trial,
@@ -258,7 +258,7 @@ async def security_headers(request: Request, call_next):
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
             "img-src 'self' data: https:; "
-            "connect-src 'self' https://api-m.paypal.com https://api-m.sandbox.paypal.com; "
+            "connect-src 'self'; "
             "frame-src 'none'; "
             "object-src 'none'; "
             "base-uri 'self'"
@@ -548,7 +548,7 @@ async def auth_me(user: dict = Depends(get_current_user)):
             "trial_hours_left": trial_hours_left,
             "trial_days": settings.TRIAL_DAYS,
         },
-        "payments_configured": paypal_configured(),
+        "payments_configured": paysera_configured(),
     }
 
 
@@ -680,87 +680,38 @@ async def restore_purchase(user: dict = Depends(get_current_user)):
     return {"restored": False, "message": "Nuk u gjet asnjë abonim aktiv."}
 
 
-# ── PayPal Billing API (one-time payments) ────────────────────
+# ── Paysera Billing API (one-time payments) ───────────────────
 
 @app.post("/api/billing/create-checkout")
 @limiter.limit("10/minute")
 async def billing_create_checkout(request: Request, user: dict = Depends(get_current_user)):
-    """Create a PayPal order and return the approval URL."""
-    if not paypal_configured():
+    """Create a Paysera checkout URL and return it."""
+    if not paysera_configured():
         raise HTTPException(
             status_code=501,
             detail="Pagesat nuk janë konfiguruar ende.",
         )
     try:
-        url = await create_order(user["id"], user["email"])
+        url = create_checkout_url(user["id"], user["email"])
         return {"url": url}
-    except httpx.HTTPStatusError as e:
-        logger.error(f"PayPal order creation failed: {e.response.status_code} {e.response.text}")
-        body = {}
-        try:
-            body = e.response.json()
-        except Exception:
-            pass
-        details = body.get("details", [])
-        if any(d.get("issue") == "PAYEE_ACCOUNT_RESTRICTED" for d in details):
-            raise HTTPException(
-                status_code=503,
-                detail="Llogaria e pagesave eshte e kufizuar perkohesisht. Provoni me vone.",
-            )
-        raise HTTPException(status_code=500, detail="Gabim gjatë krijimit të sesionit. Provoni përsëri.")
     except Exception as e:
-        logger.error(f"PayPal order creation failed: {e}")
+        logger.error(f"Paysera checkout creation failed: {e}")
         raise HTTPException(status_code=500, detail="Gabim gjatë krijimit të sesionit. Provoni përsëri.")
 
 
-@app.get("/api/billing/capture")
-async def billing_capture(token: str = "", PayerID: str = ""):
-    """PayPal redirects here after user approves the payment.
-
-    Captures the order and activates premium, then redirects to /app.
-    """
-    if not token:
-        return FileResponse(str(frontend_dir / "index.html"))
-    try:
-        result = await capture_order(token)
-        if result.get("captured") or result.get("already_captured"):
-            logger.info(f"Payment captured successfully: {result}")
-            from fastapi.responses import RedirectResponse
-            return RedirectResponse(url="/app?subscription=success", status_code=302)
-        else:
-            logger.warning(f"Payment capture incomplete: {result}")
-            from fastapi.responses import RedirectResponse
-            return RedirectResponse(url="/app?subscription=failed", status_code=302)
-    except Exception as e:
-        logger.error(f"Payment capture error: {e}")
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(url="/app?subscription=failed", status_code=302)
-
-
-@app.post("/api/paypal/webhook")
-async def paypal_webhook(request: Request):
-    """PayPal webhook endpoint — JSON POST, signature verified via API."""
-    raw_body = await request.body()
-    headers = dict(request.headers)
+@app.get("/api/paysera/callback")
+async def paysera_callback(data: str = "", ss1: str = ""):
+    """Paysera server-to-server callback. Must return 'OK' on success."""
+    if not data or not ss1:
+        return Response(content="OK", media_type="text/plain")
 
     try:
-        verified = await verify_webhook_signature(headers, raw_body)
+        result = await process_callback(data, ss1)
+        logger.info(f"Paysera callback processed: {result}")
     except Exception as e:
-        logger.error(f"PayPal webhook verification error: {e}")
-        return JSONResponse({"error": "verification_failed"}, status_code=400)
+        logger.error(f"Paysera callback processing error: {e}")
 
-    if not verified:
-        logger.warning("PayPal webhook signature verification FAILED")
-        return JSONResponse({"error": "invalid_signature"}, status_code=403)
-
-    try:
-        event = __import__("json").loads(raw_body)
-        result = await process_webhook_event(event)
-        logger.info(f"PayPal webhook processed: {result}")
-    except Exception as e:
-        logger.error(f"PayPal webhook processing error: {e}")
-
-    return JSONResponse({"status": "ok"})
+    return Response(content="OK", media_type="text/plain")
 
 
 @app.get("/api/billing/status")
@@ -773,7 +724,7 @@ async def billing_status_endpoint(user: dict = Depends(get_current_user)):
 async def billing_config():
     """Public: return pricing info and whether payments are configured."""
     return {
-        "payments_configured": paypal_configured(),
+        "payments_configured": paysera_configured(),
         "price_eur": settings.SUBSCRIPTION_PRICE_EUR,
     }
 

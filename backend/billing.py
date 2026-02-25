@@ -1,18 +1,21 @@
-"""PayPal billing: One-time Orders API + Webhook verification.
+"""Paysera billing: One-time checkout + Callback verification.
 
-Flow (one-time payment, Albanian-card compatible):
-  1. Backend creates a PayPal Order for 4.99 EUR (30 days premium)
-  2. Returns the approval URL to the frontend
-  3. User approves on PayPal's hosted page (card or PayPal balance)
-  4. User is redirected back to /api/billing/capture?token=ORDER_ID
-  5. Backend captures the order and activates premium for 30 days
-  6. PayPal also sends webhook for PAYMENT.CAPTURE.COMPLETED
+Flow:
+  1. Backend builds a signed Paysera redirect URL for 4.99 EUR (30 days premium)
+  2. User is redirected to Paysera's hosted checkout page
+  3. User pays via bank transfer, card, or other Paysera methods
+  4. Paysera redirects user back to accepturl (/app?subscription=success)
+  5. Paysera sends server-to-server callback to callbackurl (/api/paysera/callback)
+  6. Backend verifies the callback signature, checks status=1, activates premium
+
+Paysera docs: https://developers.paysera.com/en/checkout/integrations/integration-specification
 """
 
+import base64
+import hashlib
 import logging
 from datetime import datetime, timedelta
-
-import httpx
+from urllib.parse import urlencode, parse_qs, quote
 
 from backend.config import settings
 from backend.database import (
@@ -26,162 +29,110 @@ from backend.database import (
 
 logger = logging.getLogger("rag.billing")
 
-_API_LIVE = "https://api-m.paypal.com"
-_API_SANDBOX = "https://api-m.sandbox.paypal.com"
-
 PREMIUM_DAYS = 30
+PAYSERA_PAY_URL = "https://www.paysera.com/pay/"
 
 
-def _api_base() -> str:
-    return _API_SANDBOX if settings.PAYPAL_SANDBOX else _API_LIVE
+def paysera_configured() -> bool:
+    return bool(settings.PAYSERA_PROJECT_ID and settings.PAYSERA_PASSWORD)
 
 
-def paypal_configured() -> bool:
-    return bool(
-        settings.PAYPAL_CLIENT_ID
-        and settings.PAYPAL_CLIENT_SECRET
-    )
+def _encode_data(params: dict) -> str:
+    """URL-encode params, base64 encode, then make URL-safe."""
+    query = urlencode(params)
+    b64 = base64.b64encode(query.encode("utf-8")).decode("utf-8")
+    return b64.replace("/", "_").replace("+", "-")
 
 
-# ── OAuth2 Access Token ─────────────────────────────────────
-
-async def _get_access_token() -> str:
-    url = f"{_api_base()}/v1/oauth2/token"
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(
-            url,
-            data={"grant_type": "client_credentials"},
-            auth=(settings.PAYPAL_CLIENT_ID, settings.PAYPAL_CLIENT_SECRET),
-            headers={"Accept": "application/json"},
-        )
-        resp.raise_for_status()
-        return resp.json()["access_token"]
+def _sign(data: str) -> str:
+    """Generate ss1 signature: md5(data + password)."""
+    raw = data + settings.PAYSERA_PASSWORD
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
-# ── Create Order (one-time payment) ─────────────────────────
+def _decode_callback_data(data_str: str) -> dict:
+    """Decode Paysera callback data parameter."""
+    safe = data_str.replace("-", "+").replace("_", "/")
+    decoded = base64.b64decode(safe).decode("utf-8")
+    parsed = parse_qs(decoded, keep_blank_values=True)
+    return {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
 
-async def create_order(user_id: int, email: str) -> str:
-    """Create a PayPal Order for one-time 4.99 EUR payment.
 
-    Returns the approval URL where the user completes the payment.
-    custom_id carries our user_id for matching.
-    """
-    if not paypal_configured():
-        raise RuntimeError("PayPal is not configured")
+def verify_callback(data_str: str, ss1: str) -> bool:
+    """Verify Paysera callback signature."""
+    expected = _sign(data_str)
+    return ss1 == expected
 
-    token = await _get_access_token()
-    url = f"{_api_base()}/v2/checkout/orders"
 
-    price = f"{settings.SUBSCRIPTION_PRICE_EUR:.2f}"
+# ── Create Checkout URL ──────────────────────────────────────
 
-    return_url = f"{settings.SERVER_URL}/api/billing/capture"
+def create_checkout_url(user_id: int, email: str) -> str:
+    """Build a signed Paysera checkout URL for one-time payment."""
+    if not paysera_configured():
+        raise RuntimeError("Paysera is not configured")
+
+    price_cents = int(settings.SUBSCRIPTION_PRICE_EUR * 100)
+    order_id = f"user_{user_id}_{int(datetime.utcnow().timestamp())}"
+
+    accept_url = f"{settings.SERVER_URL}/app?subscription=success"
     cancel_url = f"{settings.SERVER_URL}/pricing?cancelled=true"
+    callback_url = f"{settings.SERVER_URL}/api/paysera/callback"
 
-    payload = {
-        "intent": "CAPTURE",
-        "purchase_units": [
-            {
-                "amount": {
-                    "currency_code": "EUR",
-                    "value": price,
-                },
-                "description": f"Albanian Law AI Premium - {PREMIUM_DAYS} dite",
-                "custom_id": f"user_{user_id}",
-            }
-        ],
-        "payment_source": {
-            "paypal": {
-                "experience_context": {
-                    "brand_name": "Albanian Law AI",
-                    "locale": "sq-AL",
-                    "shipping_preference": "NO_SHIPPING",
-                    "user_action": "PAY_NOW",
-                    "return_url": return_url,
-                    "cancel_url": cancel_url,
-                }
-            }
-        },
+    params = {
+        "projectid": settings.PAYSERA_PROJECT_ID,
+        "orderid": order_id,
+        "accepturl": accept_url,
+        "cancelurl": cancel_url,
+        "callbackurl": callback_url,
+        "version": "1.6",
+        "amount": str(price_cents),
+        "currency": "EUR",
+        "country": "AL",
+        "paytext": f"Albanian Law AI Premium - 30 dite (nr. [order_nr]) ([site_name])",
+        "p_email": email,
+        "test": "1" if settings.PAYSERA_TEST else "0",
     }
 
-    logger.info(f"Creating PayPal order: {price} EUR, return_url={return_url}")
+    data = _encode_data(params)
+    sign = _sign(data)
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.post(
-            url,
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-        )
-        if resp.status_code >= 400:
-            logger.error(f"PayPal order API error: {resp.status_code} {resp.text}")
-        resp.raise_for_status()
-        data = resp.json()
-
-    approval_url = ""
-    for link in data.get("links", []):
-        if link.get("rel") in ("approve", "payer-action"):
-            approval_url = link["href"]
-            break
-
-    if not approval_url:
-        logger.error(f"PayPal order created but no approval link: {data}")
-        raise RuntimeError("PayPal did not return an approval URL")
-
-    logger.info(f"PayPal order {data.get('id')} created for user {user_id} ({price} EUR)")
-    return approval_url
+    url = f"{PAYSERA_PAY_URL}?data={data}&sign={sign}"
+    logger.info(f"Paysera checkout created: order={order_id} user={user_id} amount={price_cents}c EUR")
+    return url
 
 
-# ── Capture Order ────────────────────────────────────────────
+# ── Process Callback ─────────────────────────────────────────
 
-async def capture_order(order_token: str) -> dict:
-    """Capture a PayPal order after user approval.
+async def process_callback(data_str: str, ss1: str) -> dict:
+    """Process and verify a Paysera callback.
 
-    Returns dict with capture status and user info.
+    Returns dict with processing result.
     """
-    token = await _get_access_token()
-    url = f"{_api_base()}/v2/checkout/orders/{order_token}/capture"
+    if not verify_callback(data_str, ss1):
+        logger.warning("Paysera callback signature verification FAILED")
+        return {"ok": False, "reason": "invalid_signature"}
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-        )
-        if resp.status_code == 422:
-            body = resp.json()
-            details = body.get("details", [])
-            if any(d.get("issue") == "ORDER_ALREADY_CAPTURED" for d in details):
-                logger.info(f"Order {order_token} was already captured")
-                return {"already_captured": True}
-        resp.raise_for_status()
-        data = resp.json()
+    params = _decode_callback_data(data_str)
+    logger.info(f"Paysera callback: {params}")
 
-    status = data.get("status", "")
-    custom_id = ""
-    payer_email = data.get("payer", {}).get("email_address", "").lower()
+    status = params.get("status", "")
+    order_id = params.get("orderid", "")
+    test = params.get("test", "0")
+    pay_amount = params.get("pay_amount", "")
+    pay_currency = params.get("pay_currency", "")
 
-    for pu in data.get("purchase_units", []):
-        for capture in pu.get("payments", {}).get("captures", []):
-            custom_id = capture.get("custom_id", "") or pu.get("custom_id", "")
-            break
-        if not custom_id:
-            custom_id = pu.get("custom_id", "")
+    if test == "1" and not settings.PAYSERA_TEST:
+        logger.warning(f"Paysera test callback received but PAYSERA_TEST is off: order={order_id}")
+        return {"ok": False, "reason": "test_payment_rejected"}
 
-    logger.info(f"PayPal capture: order={order_token} status={status} custom_id={custom_id} email={payer_email}")
+    if str(status) != "1":
+        logger.info(f"Paysera callback status={status} (not successful) for order={order_id}")
+        return {"ok": True, "action": "ignored", "status": status}
 
-    if status != "COMPLETED":
-        return {"captured": False, "status": status}
-
-    user = await _resolve_user(custom_id, payer_email)
+    user = await _resolve_user_from_order(order_id, params.get("p_email", ""))
     if not user:
-        logger.warning(f"Capture: could not match user for custom_id={custom_id} email={payer_email}")
-        return {"captured": True, "activated": False, "reason": "user_not_found"}
+        logger.warning(f"Paysera callback: could not match user for order={order_id}")
+        return {"ok": False, "reason": "user_not_found"}
 
     user_id = user["id"]
     premium_until = datetime.utcnow() + timedelta(days=PREMIUM_DAYS)
@@ -189,119 +140,31 @@ async def capture_order(order_token: str) -> dict:
     await update_user_billing(user_id, is_premium=True, subscription_status="active")
     await upsert_subscription(
         user_id=user_id,
-        purchase_token=order_token,
-        product_id="paypal_onetime",
+        purchase_token=order_id,
+        product_id="paysera_onetime",
         status="active",
         current_period_end=premium_until.strftime("%Y-%m-%dT%H:%M:%S"),
-        platform="paypal",
+        platform="paysera",
     )
     await set_trial_used_on_subscription(user_id)
-    logger.info(f"User {user_id} activated via PayPal until {premium_until.date()} (order={order_token})")
 
-    return {"captured": True, "activated": True, "user_id": user_id, "premium_until": str(premium_until.date())}
-
-
-# ── Webhook Signature Verification ──────────────────────────
-
-async def verify_webhook_signature(headers: dict, raw_body: bytes) -> bool:
-    webhook_id = settings.PAYPAL_WEBHOOK_ID
-    if not webhook_id:
-        logger.warning("PAYPAL_WEBHOOK_ID not set — skipping signature verification")
-        return True
-
-    token = await _get_access_token()
-    url = f"{_api_base()}/v1/notifications/verify-webhook-signature"
-
-    verify_payload = {
-        "auth_algo": headers.get("paypal-auth-algo", ""),
-        "cert_url": headers.get("paypal-cert-url", ""),
-        "transmission_id": headers.get("paypal-transmission-id", ""),
-        "transmission_sig": headers.get("paypal-transmission-sig", ""),
-        "transmission_time": headers.get("paypal-transmission-time", ""),
-        "webhook_id": webhook_id,
-        "webhook_event": __import__("json").loads(raw_body),
-    }
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(
-            url,
-            json=verify_payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-        )
-        if resp.status_code != 200:
-            logger.warning(f"PayPal webhook verification API returned {resp.status_code}")
-            return False
-        result = resp.json()
-
-    status = result.get("verification_status", "")
-    if status != "SUCCESS":
-        logger.warning(f"PayPal webhook signature FAILED: {status}")
-        return False
-
-    return True
+    logger.info(
+        f"User {user_id} activated via Paysera until {premium_until.date()} "
+        f"(order={order_id}, amount={pay_amount} {pay_currency})"
+    )
+    return {"ok": True, "action": "activated", "user_id": user_id}
 
 
-# ── Webhook Event Processing ────────────────────────────────
-
-async def process_webhook_event(event: dict) -> dict:
-    event_type = event.get("event_type", "")
-    resource = event.get("resource", {})
-
-    logger.info(f"PayPal webhook: type={event_type}")
-
-    if event_type == "PAYMENT.CAPTURE.COMPLETED":
-        custom_id = resource.get("custom_id", "")
-        payer_email = ""
-        amount = resource.get("amount", {})
-        capture_id = resource.get("id", "")
-
-        user = await _resolve_user(custom_id, payer_email)
-        if not user:
-            logger.warning(f"Webhook: could not match user for custom_id={custom_id}")
-            return {"processed": False, "reason": "user_not_found"}
-
-        user_id = user["id"]
-        premium_until = datetime.utcnow() + timedelta(days=PREMIUM_DAYS)
-
-        await update_user_billing(user_id, is_premium=True, subscription_status="active")
-        await upsert_subscription(
-            user_id=user_id,
-            purchase_token=capture_id,
-            product_id="paypal_onetime",
-            status="active",
-            current_period_end=premium_until.strftime("%Y-%m-%dT%H:%M:%S"),
-            platform="paypal",
-        )
-        await set_trial_used_on_subscription(user_id)
-        logger.info(f"Webhook: User {user_id} activated until {premium_until.date()}")
-        return {"processed": True, "action": "activated", "user_id": user_id}
-
-    elif event_type == "PAYMENT.CAPTURE.REFUNDED":
-        custom_id = resource.get("custom_id", "")
-        user = await _resolve_user(custom_id, "")
-        if user:
-            await update_user_billing(user["id"], is_premium=False, subscription_status="refunded")
-            logger.info(f"Webhook: User {user['id']} deactivated (refund)")
-            return {"processed": True, "action": "deactivated"}
-        return {"processed": False, "reason": "user_not_found"}
-
-    else:
-        logger.info(f"PayPal webhook ignored: event_type={event_type}")
-        return {"processed": True, "action": "ignored", "event_type": event_type}
-
-
-async def _resolve_user(custom_id: str, email: str) -> dict | None:
-    if custom_id:
-        uid_str = custom_id.replace("user_", "")
-        if uid_str.isdigit():
-            user = await get_user_by_id(int(uid_str))
+async def _resolve_user_from_order(order_id: str, email: str) -> dict | None:
+    """Extract user_id from order_id format 'user_{id}_{timestamp}'."""
+    if order_id and order_id.startswith("user_"):
+        parts = order_id.split("_")
+        if len(parts) >= 2 and parts[1].isdigit():
+            user = await get_user_by_id(int(parts[1]))
             if user:
                 return user
     if email:
-        user = await get_user_by_email(email)
+        user = await get_user_by_email(email.strip().lower())
         if user:
             return user
     return None
@@ -359,5 +222,5 @@ async def get_billing_status(user_id: int) -> dict:
         ),
         "price_eur": settings.SUBSCRIPTION_PRICE_EUR,
         "premium_days": PREMIUM_DAYS,
-        "paypal_configured": paypal_configured(),
+        "paysera_configured": paysera_configured(),
     }

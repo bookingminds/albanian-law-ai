@@ -173,7 +173,7 @@
             </div>
             <div class="faq-item">
                 <h3>Cilat metoda pagese pranohen?</h3>
-                <p>Pranojmë kartë krediti/debiti (Visa, Mastercard) dhe llogari PayPal. Pagesa është e sigurt dhe e mbrojtur përmes PayPal.</p>
+                <p>Pranojmë kartë krediti/debiti (Visa, Mastercard), transfertë bankare, dhe metoda të tjera pagese. Pagesa është e sigurt përmes Paysera.</p>
             </div>
             <div class="faq-item">
                 <h3>Kush i mirëmban ligjet në sistem?</h3>
@@ -199,7 +199,7 @@
             var btn = document.getElementById('premiumBtn');
             var origText = btn.textContent;
             btn.disabled = true;
-            btn.textContent = 'Duke u drejtuar te PayPal...';
+            btn.textContent = 'Duke u drejtuar te Paysera...';
             try {
                 var cfgRes = await fetch('/api/billing/config');
                 if (!cfgRes.ok) throw new Error('Nuk mund të kontrollojmë statusin e pagesave.');
@@ -216,7 +216,7 @@
                 if (data.url && data.url.indexOf('https://') === 0) {
                     window.location.href = data.url;
                 } else {
-                    throw new Error('Gabim gjatë lidhjes me PayPal. Provoni përsëri.');
+                    throw new Error('Gabim gjatë lidhjes me Paysera. Provoni përsëri.');
                 }
             } catch (err) {
                 alert(err.message || 'Gabim gjatë krijimit të sesionit. Provoni përsëri.');

@@ -338,7 +338,7 @@
             var btn = document.getElementById('paywallOverlaySubscribe');
             var origText = btn.textContent;
             btn.disabled = true;
-            btn.textContent = 'Duke u drejtuar te PayPal...';
+            btn.textContent = 'Duke u drejtuar te Paysera...';
             try {
                 var token = typeof getToken === 'function' ? getToken() : null;
                 if (!token) { window.location.href = '/login?redirect=/app'; return; }
@@ -357,7 +357,7 @@
                 if (data.url && data.url.indexOf('https://') === 0) {
                     window.location.href = data.url;
                 } else {
-                    throw new Error('Gabim gjatë lidhjes me PayPal. Provoni përsëri.');
+                    throw new Error('Gabim gjatë lidhjes me Paysera. Provoni përsëri.');
                 }
             } catch (err) {
                 if (typeof showToast === 'function') showToast(err.message, 'error');

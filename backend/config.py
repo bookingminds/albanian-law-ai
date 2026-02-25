@@ -68,11 +68,10 @@ class Settings(BaseSettings):
     GOOGLE_PLAY_PRODUCT_ID: str = "law_ai_monthly"
     SUBSCRIPTION_PRICE_EUR: float = 4.99
 
-    # PayPal (web payments)
-    PAYPAL_CLIENT_ID: str = os.environ.get("PAYPAL_CLIENT_ID", "")
-    PAYPAL_CLIENT_SECRET: str = os.environ.get("PAYPAL_CLIENT_SECRET", "")
-    PAYPAL_WEBHOOK_ID: str = os.environ.get("PAYPAL_WEBHOOK_ID", "")
-    PAYPAL_SANDBOX: bool = os.environ.get("PAYPAL_SANDBOX", "true").lower() in ("true", "1", "yes")
+    # Paysera (web payments)
+    PAYSERA_PROJECT_ID: str = os.environ.get("PAYSERA_PROJECT_ID", "")
+    PAYSERA_PASSWORD: str = os.environ.get("PAYSERA_PASSWORD", "")
+    PAYSERA_TEST: bool = os.environ.get("PAYSERA_TEST", "false").lower() in ("true", "1", "yes")
 
     SERVER_URL: str = os.environ.get("SERVER_URL", os.environ.get("RAILWAY_PUBLIC_DOMAIN", "http://localhost:8000"))
     FRONTEND_URL: str = os.environ.get("FRONTEND_URL", os.environ.get("RAILWAY_PUBLIC_DOMAIN", "http://localhost:8000"))

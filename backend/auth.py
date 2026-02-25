@@ -231,7 +231,7 @@ async def require_admin(user: dict = Depends(get_current_user)):
 
 
 async def require_subscription(user: dict = Depends(get_current_user)):
-    """Require active subscription (PayPal/Google Play) OR valid free trial."""
+    """Require active subscription (Paysera/Google Play) OR valid free trial."""
     from backend.database import get_active_subscription, mark_trial_used, set_trial_ends_at
     if user.get("is_admin"):
         return user
