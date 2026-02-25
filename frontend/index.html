@@ -329,7 +329,7 @@
             var btn = document.getElementById('paywallOverlaySubscribe');
             var origText = btn.textContent;
             btn.disabled = true;
-            btn.textContent = 'Duke u drejtuar...';
+            btn.textContent = 'Duke u drejtuar te PayPal...';
             try {
                 var token = typeof getToken === 'function' ? getToken() : null;
                 var cfgRes = await fetch('/api/billing/config');

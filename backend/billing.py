@@ -1,18 +1,19 @@
-"""2Checkout (Verifone) billing: Hosted Checkout URL + IPN webhook verification.
+"""PayPal billing: Subscriptions API + Webhook verification.
 
 Flow:
-  1. Backend builds a 2Checkout Buy-Link URL with the user's info
-  2. Frontend redirects the user to that URL
-  3. User pays on 2Checkout's hosted page
-  4. 2Checkout sends IPN POST to /api/2checkout/webhook
-  5. We verify the HMAC-MD5 signature and activate premium
+  1. Backend creates a PayPal subscription via REST API
+  2. Returns the approval URL to the frontend
+  3. User approves on PayPal's hosted page
+  4. PayPal sends webhook POST to /api/paypal/webhook
+  5. We verify the webhook signature and activate premium
+  6. User is redirected back to /app?subscription=success
 """
 
 import hashlib
-import hmac as _hmac
 import logging
 from datetime import datetime
-from urllib.parse import urlencode, parse_qsl
+
+import httpx
 
 from backend.config import settings
 from backend.database import (
@@ -26,210 +27,223 @@ from backend.database import (
 
 logger = logging.getLogger("rag.billing")
 
-_CHECKOUT_LIVE = "https://secure.2checkout.com/checkout/buy"
-_CHECKOUT_SANDBOX = "https://sandbox.2checkout.com/checkout/buy"
+_API_LIVE = "https://api-m.paypal.com"
+_API_SANDBOX = "https://api-m.sandbox.paypal.com"
 
 
-def twoco_configured() -> bool:
+def _api_base() -> str:
+    return _API_SANDBOX if settings.PAYPAL_SANDBOX else _API_LIVE
+
+
+def paypal_configured() -> bool:
     return bool(
-        settings.TWOCO_SELLER_ID
-        and settings.TWOCO_SECRET_KEY
-        and settings.TWOCO_PRODUCT_ID
+        settings.PAYPAL_CLIENT_ID
+        and settings.PAYPAL_CLIENT_SECRET
+        and settings.PAYPAL_PLAN_ID
     )
 
 
-# ── Hosted Checkout URL ──────────────────────────────────────
+# ── OAuth2 Access Token ─────────────────────────────────────
 
-def build_checkout_url(user_id: int, email: str) -> str:
-    """Build a 2Checkout Buy-Link URL for the Premium subscription.
-
-    The URL contains the seller ID, product code, customer email,
-    and an external reference (our user_id) that comes back in the IPN
-    as REFNOEXT so we can match the payment to the user.
-    """
-    if not twoco_configured():
-        raise RuntimeError(
-            "2Checkout is not configured "
-            "(missing TWOCO_SELLER_ID or TWOCO_SECRET_KEY)"
+async def _get_access_token() -> str:
+    """Get a PayPal OAuth2 access token using client credentials."""
+    url = f"{_api_base()}/v1/oauth2/token"
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            url,
+            data={"grant_type": "client_credentials"},
+            auth=(settings.PAYPAL_CLIENT_ID, settings.PAYPAL_CLIENT_SECRET),
+            headers={"Accept": "application/json"},
         )
+        resp.raise_for_status()
+        return resp.json()["access_token"]
 
-    base = _CHECKOUT_SANDBOX if settings.TWOCO_SANDBOX else _CHECKOUT_LIVE
 
-    params = {
-        "merchant": settings.TWOCO_SELLER_ID,
-        "tpl": "default",
-        "prod": settings.TWOCO_PRODUCT_ID,
-        "qty": "1",
-        "type": "PRODUCT",
-        "return-url": f"{settings.SERVER_URL}/app?subscription=success",
-        "return-type": "redirect",
-        "expiration": "",
-        "order-ext-ref": f"user_{user_id}",
-        "customer-ref": f"user_{user_id}",
-        "customer-email": email,
-        "currency": "EUR",
+# ── Create Subscription ─────────────────────────────────────
+
+async def create_subscription(user_id: int, email: str) -> str:
+    """Create a PayPal subscription and return the approval URL.
+
+    The custom_id field carries our user_id so we can match the
+    webhook event back to the correct user.
+    """
+    if not paypal_configured():
+        raise RuntimeError("PayPal is not configured (missing CLIENT_ID, SECRET, or PLAN_ID)")
+
+    token = await _get_access_token()
+    url = f"{_api_base()}/v1/billing/subscriptions"
+
+    payload = {
+        "plan_id": settings.PAYPAL_PLAN_ID,
+        "custom_id": f"user_{user_id}",
+        "subscriber": {
+            "email_address": email,
+        },
+        "application_context": {
+            "brand_name": "Albanian Law AI",
+            "locale": "sq-AL",
+            "shipping_preference": "NO_SHIPPING",
+            "user_action": "SUBSCRIBE_NOW",
+            "return_url": f"{settings.SERVER_URL}/app?subscription=success",
+            "cancel_url": f"{settings.SERVER_URL}/pricing?cancelled=true",
+        },
     }
 
-    url = f"{base}?{urlencode(params)}"
-    logger.info(f"2Checkout checkout URL built for user {user_id}")
-    return url
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(
+            url,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    approval_url = ""
+    for link in data.get("links", []):
+        if link.get("rel") == "approve":
+            approval_url = link["href"]
+            break
+
+    if not approval_url:
+        logger.error(f"PayPal subscription created but no approval link: {data}")
+        raise RuntimeError("PayPal did not return an approval URL")
+
+    logger.info(f"PayPal subscription {data.get('id')} created for user {user_id}")
+    return approval_url
 
 
-# ── IPN Signature Verification ───────────────────────────────
-#
-# 2Checkout IPN sends a form-encoded POST. The HASH field is
-# HMAC-MD5(secret, concat(len(val)+val for each field except HASH)).
-# We must preserve the original field order from the POST body.
+# ── Webhook Signature Verification ──────────────────────────
 
-def _ipn_hmac(secret: str, message: str) -> str:
-    """HMAC-MD5 hex digest (matches PHP hash_hmac('md5', ...))."""
-    return _hmac.new(
-        secret.encode("utf-8"),
-        message.encode("utf-8"),
-        hashlib.md5,
-    ).hexdigest()
+async def verify_webhook_signature(
+    headers: dict,
+    raw_body: bytes,
+) -> bool:
+    """Verify a PayPal webhook event using the Notifications API.
 
-
-def verify_ipn_signature(raw_body: bytes, secret: str) -> bool:
-    """Verify a 2Checkout IPN request by recomputing the HASH.
-
-    The raw POST body is parsed in order; for each value (except the
-    HASH field) we prepend the byte-length of the value, then the value
-    itself.  The result is HMAC-MD5'd with the IPN secret.
+    PayPal recommends server-side verification via their API rather
+    than manual signature checking.
     """
-    pairs = parse_qsl(raw_body.decode("utf-8"), keep_blank_values=True)
+    webhook_id = settings.PAYPAL_WEBHOOK_ID
+    if not webhook_id:
+        logger.warning("PAYPAL_WEBHOOK_ID not set — skipping signature verification")
+        return True
 
-    hash_input = ""
-    received_hash = ""
+    token = await _get_access_token()
+    url = f"{_api_base()}/v1/notifications/verify-webhook-signature"
 
-    for key, value in pairs:
-        if key == "HASH":
-            received_hash = value
-            continue
-        byte_len = len(value.encode("utf-8"))
-        hash_input += str(byte_len) + value
+    verify_payload = {
+        "auth_algo": headers.get("paypal-auth-algo", ""),
+        "cert_url": headers.get("paypal-cert-url", ""),
+        "transmission_id": headers.get("paypal-transmission-id", ""),
+        "transmission_sig": headers.get("paypal-transmission-sig", ""),
+        "transmission_time": headers.get("paypal-transmission-time", ""),
+        "webhook_id": webhook_id,
+        "webhook_event": __import__("json").loads(raw_body),
+    }
 
-    if not received_hash:
-        logger.warning("IPN: no HASH field found in payload")
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            url,
+            json=verify_payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+        )
+        if resp.status_code != 200:
+            logger.warning(f"PayPal webhook verification API returned {resp.status_code}")
+            return False
+        result = resp.json()
+
+    status = result.get("verification_status", "")
+    if status != "SUCCESS":
+        logger.warning(f"PayPal webhook signature FAILED: {status}")
         return False
 
-    computed = _ipn_hmac(secret, hash_input)
-    ok = _hmac.compare_digest(computed.lower(), received_hash.lower())
-    if not ok:
-        logger.warning(
-            f"IPN hash mismatch: computed={computed[:12]}… "
-            f"received={received_hash[:12]}…"
-        )
-    return ok
+    return True
 
 
-def build_ipn_response(secret: str) -> str:
-    """Build the acknowledgement that 2Checkout expects:
+# ── Webhook Event Processing ────────────────────────────────
 
-        <EPAYMENT>YYYYMMDDHHmmss|HASH</EPAYMENT>
+async def process_webhook_event(event: dict) -> dict:
+    """Process a verified PayPal webhook event.
 
-    where HASH = HMAC-MD5(secret, len(date_str) + date_str).
+    Key event types:
+      BILLING.SUBSCRIPTION.ACTIVATED  – subscription is now active
+      BILLING.SUBSCRIPTION.CANCELLED  – user cancelled
+      BILLING.SUBSCRIPTION.SUSPENDED  – payment failed / suspended
+      BILLING.SUBSCRIPTION.EXPIRED    – subscription expired
+      PAYMENT.SALE.COMPLETED          – recurring payment received
     """
-    now = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    hash_input = str(len(now)) + now
-    h = _ipn_hmac(secret, hash_input)
-    return f"<EPAYMENT>{now}|{h}</EPAYMENT>"
+    event_type = event.get("event_type", "")
+    resource = event.get("resource", {})
 
-
-# ── IPN Payload Parsing ──────────────────────────────────────
-
-def parse_ipn_body(raw_body: bytes) -> dict:
-    """Parse the IPN form body into a dict (arrays become lists)."""
-    pairs = parse_qsl(raw_body.decode("utf-8"), keep_blank_values=True)
-    result: dict = {}
-    for key, value in pairs:
-        if key in result:
-            existing = result[key]
-            if isinstance(existing, list):
-                existing.append(value)
-            else:
-                result[key] = [existing, value]
-        else:
-            result[key] = value
-    return result
-
-
-# ── IPN Event Processing ─────────────────────────────────────
-
-async def process_ipn(data: dict) -> dict:
-    """Process a verified 2Checkout IPN notification.
-
-    Key IPN fields:
-      REFNO          – 2Checkout order reference
-      REFNOEXT       – our external ref ("user_42")
-      ORDERSTATUS    – COMPLETE, CANCELED, REFUND, etc.
-      CUSTOMEREMAIL  – buyer email (fallback for user matching)
-      IPN_LICENSE_REF[0] – subscription/license reference
-    """
-    refno = data.get("REFNO", "")
-    refnoext = data.get("REFNOEXT", "")
-    order_status = data.get("ORDERSTATUS", "").upper()
-    customer_email = (
-        data.get("CUSTOMEREMAIL", "")
-        or data.get("EMAIL", "")
-        or data.get("FIRSTNAME_D", "")
-    ).strip().lower()
-
-    license_ref = ""
-    lr = data.get("IPN_LICENSE_REF[]") or data.get("IPN_LICENSE_REF[0]", "")
-    if isinstance(lr, list):
-        license_ref = lr[0] if lr else ""
-    else:
-        license_ref = lr
+    subscription_id = resource.get("id", "")
+    custom_id = resource.get("custom_id", "")
+    subscriber = resource.get("subscriber", {})
+    subscriber_email = subscriber.get("email_address", "").strip().lower()
+    status_detail = resource.get("status", "").upper()
 
     logger.info(
-        f"IPN received: REFNO={refno} REFNOEXT={refnoext} "
-        f"STATUS={order_status} EMAIL={customer_email}"
+        f"PayPal webhook: type={event_type} sub_id={subscription_id} "
+        f"custom_id={custom_id} email={subscriber_email} status={status_detail}"
     )
 
-    user = await _resolve_user(refnoext, customer_email)
+    user = await _resolve_user(custom_id, subscriber_email)
     if not user:
-        logger.warning(f"IPN: could not match user for REFNOEXT={refnoext} EMAIL={customer_email}")
+        logger.warning(f"Webhook: could not match user for custom_id={custom_id} email={subscriber_email}")
         return {"processed": False, "reason": "user_not_found"}
 
     user_id = user["id"]
 
-    if order_status in ("COMPLETE", ""):
+    if event_type in (
+        "BILLING.SUBSCRIPTION.ACTIVATED",
+        "BILLING.SUBSCRIPTION.RENEWED",
+        "PAYMENT.SALE.COMPLETED",
+    ):
         await update_user_billing(user_id, is_premium=True, subscription_status="active")
         await upsert_subscription(
             user_id=user_id,
-            purchase_token=refno,
-            product_id=settings.TWOCO_PRODUCT_ID,
+            purchase_token=subscription_id,
+            product_id=settings.PAYPAL_PLAN_ID,
             status="active",
             current_period_end=None,
-            platform="2checkout",
+            platform="paypal",
         )
         await set_trial_used_on_subscription(user_id)
-        logger.info(f"User {user_id} activated via 2Checkout (REFNO={refno})")
+        logger.info(f"User {user_id} activated via PayPal (sub={subscription_id})")
         return {"processed": True, "action": "activated", "user_id": user_id}
 
-    elif order_status in ("CANCELED", "REFUND", "REVERSED"):
+    elif event_type in (
+        "BILLING.SUBSCRIPTION.CANCELLED",
+        "BILLING.SUBSCRIPTION.SUSPENDED",
+        "BILLING.SUBSCRIPTION.EXPIRED",
+    ):
         await update_user_billing(user_id, is_premium=False, subscription_status="canceled")
         await upsert_subscription(
             user_id=user_id,
-            purchase_token=refno,
-            product_id=settings.TWOCO_PRODUCT_ID,
+            purchase_token=subscription_id,
+            product_id=settings.PAYPAL_PLAN_ID,
             status="canceled",
             current_period_end=None,
-            platform="2checkout",
+            platform="paypal",
         )
-        logger.info(f"User {user_id} deactivated via 2Checkout (REFNO={refno}, status={order_status})")
+        logger.info(f"User {user_id} deactivated via PayPal (sub={subscription_id}, event={event_type})")
         return {"processed": True, "action": "deactivated", "user_id": user_id}
 
     else:
-        logger.info(f"IPN ignored: status={order_status} for user {user_id}")
-        return {"processed": True, "action": "ignored", "status": order_status}
+        logger.info(f"PayPal webhook ignored: event_type={event_type} for user {user_id}")
+        return {"processed": True, "action": "ignored", "event_type": event_type}
 
 
-async def _resolve_user(refnoext: str, email: str) -> dict | None:
-    """Find the user by external reference or email."""
-    if refnoext:
-        uid_str = refnoext.replace("user_", "")
+async def _resolve_user(custom_id: str, email: str) -> dict | None:
+    """Find the user by custom_id (user_X) or email."""
+    if custom_id:
+        uid_str = custom_id.replace("user_", "")
         if uid_str.isdigit():
             user = await get_user_by_id(int(uid_str))
             if user:
@@ -269,7 +283,7 @@ async def get_billing_status(user_id: int) -> dict:
         elif end:
             trial_expired = True
 
-    gp_sub = await get_active_subscription(user_id)
+    sub = await get_active_subscription(user_id)
 
     return {
         "user_id": user_id,
@@ -283,16 +297,17 @@ async def get_billing_status(user_id: int) -> dict:
             "trial_ends_at": str(trial_ends_at) if trial_ends_at else None,
             "trial_used_at": str(trial_used_at) if trial_used_at else None,
         },
-        "google_play_subscription": {
-            "status": gp_sub["status"],
-            "current_period_end": str(gp_sub["current_period_end"]) if gp_sub.get("current_period_end") else "",
-        } if gp_sub else None,
+        "subscription": {
+            "status": sub["status"],
+            "platform": sub.get("platform", ""),
+            "current_period_end": str(sub["current_period_end"]) if sub.get("current_period_end") else "",
+        } if sub else None,
         "has_access": bool(
             user.get("is_admin")
             or user.get("is_premium")
             or in_trial
-            or gp_sub
+            or sub
         ),
         "price_eur": settings.SUBSCRIPTION_PRICE_EUR,
-        "twoco_configured": twoco_configured(),
+        "paypal_configured": paypal_configured(),
     }

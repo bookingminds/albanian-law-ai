@@ -60,8 +60,8 @@ from backend.file_storage import (
     check_storage_health, list_bucket_files,
 )
 from backend.billing import (
-    build_checkout_url, verify_ipn_signature, build_ipn_response,
-    parse_ipn_body, process_ipn, get_billing_status, twoco_configured,
+    create_subscription, verify_webhook_signature,
+    process_webhook_event, get_billing_status, paypal_configured,
 )
 from backend.database import (
     update_user_billing, expire_user_trial,
@@ -450,7 +450,7 @@ async def auth_me(user: dict = Depends(get_current_user)):
             "trial_hours_left": trial_hours_left,
             "trial_days": settings.TRIAL_DAYS,
         },
-        "payments_configured": twoco_configured(),
+        "payments_configured": paypal_configured(),
     }
 
 
@@ -582,51 +582,51 @@ async def restore_purchase(user: dict = Depends(get_current_user)):
     return {"restored": False, "message": "Nuk u gjet asnjë abonim aktiv."}
 
 
-# ── 2Checkout Billing API (web payments) ──────────────────────
+# ── PayPal Billing API (web payments) ─────────────────────────
 
 @app.post("/api/billing/create-checkout")
 async def billing_create_checkout(user: dict = Depends(get_current_user)):
-    """Build a 2Checkout hosted checkout URL and return it."""
-    if not twoco_configured():
+    """Create a PayPal subscription and return the approval URL."""
+    if not paypal_configured():
         raise HTTPException(
             status_code=501,
             detail="Pagesat nuk janë konfiguruar ende.",
         )
     try:
-        url = build_checkout_url(user["id"], user["email"])
+        url = await create_subscription(user["id"], user["email"])
         return {"url": url}
     except Exception as e:
-        logger.error(f"2Checkout checkout URL failed: {e}")
+        logger.error(f"PayPal subscription creation failed: {e}")
         raise HTTPException(status_code=500, detail="Gabim gjatë krijimit të sesionit. Provoni përsëri.")
 
 
-@app.post("/api/2checkout/webhook")
-async def twoco_webhook(request: Request):
-    """2Checkout IPN webhook — form-encoded POST, HMAC-MD5 signature.
+@app.post("/api/paypal/webhook")
+async def paypal_webhook(request: Request):
+    """PayPal webhook endpoint — JSON POST, signature verified via API.
 
-    No auth required: called server-to-server by 2Checkout.
-    Must return the <EPAYMENT>DATE|HASH</EPAYMENT> acknowledgement.
+    No auth required: called server-to-server by PayPal.
     """
     raw_body = await request.body()
-    secret = settings.TWOCO_IPN_SECRET or settings.TWOCO_SECRET_KEY
+    headers = dict(request.headers)
 
-    if not secret:
-        logger.error("IPN received but no TWOCO_IPN_SECRET / TWOCO_SECRET_KEY configured")
-        return Response(content="no secret configured", status_code=500)
-
-    if not verify_ipn_signature(raw_body, secret):
-        logger.warning("IPN signature verification FAILED")
-        return Response(content="invalid signature", status_code=403)
-
-    data = parse_ipn_body(raw_body)
     try:
-        result = await process_ipn(data)
-        logger.info(f"IPN processed: {result}")
+        verified = await verify_webhook_signature(headers, raw_body)
     except Exception as e:
-        logger.error(f"IPN processing error: {e}")
+        logger.error(f"PayPal webhook verification error: {e}")
+        return JSONResponse({"error": "verification_failed"}, status_code=400)
 
-    ack = build_ipn_response(secret)
-    return Response(content=ack, media_type="text/xml")
+    if not verified:
+        logger.warning("PayPal webhook signature verification FAILED")
+        return JSONResponse({"error": "invalid_signature"}, status_code=403)
+
+    try:
+        event = __import__("json").loads(raw_body)
+        result = await process_webhook_event(event)
+        logger.info(f"PayPal webhook processed: {result}")
+    except Exception as e:
+        logger.error(f"PayPal webhook processing error: {e}")
+
+    return JSONResponse({"status": "ok"})
 
 
 @app.get("/api/billing/status")
@@ -639,9 +639,10 @@ async def billing_status_endpoint(user: dict = Depends(get_current_user)):
 async def billing_config():
     """Public: return pricing info and whether payments are configured."""
     return {
-        "payments_configured": twoco_configured(),
+        "payments_configured": paypal_configured(),
         "price_eur": settings.SUBSCRIPTION_PRICE_EUR,
-        "sandbox": settings.TWOCO_SANDBOX,
+        "sandbox": settings.PAYPAL_SANDBOX,
+        "paypal_client_id": settings.PAYPAL_CLIENT_ID if paypal_configured() else "",
     }
 
 
