@@ -100,6 +100,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"ChromaDB migration skipped: {e}")
     try:
+        rebuilt = await _rebuild_chroma_if_empty()
+        if rebuilt:
+            logger.info("ChromaDB rebuilt from PostgreSQL chunks")
+    except Exception as e:
+        logger.warning(f"ChromaDB rebuild skipped: {e}")
+    try:
         asyncio.get_event_loop().run_in_executor(None, _build_topic_index)
     except Exception as e:
         logger.warning(f"Topic index build skipped: {e}")
@@ -122,6 +128,74 @@ async def _run_chroma_migration():
                 logger.info(f"ChromaDB migration: {updated} chunks updated with user_id")
     except Exception as e:
         logger.warning(f"ChromaDB migration skipped: {e}")
+
+
+async def _rebuild_chroma_if_empty() -> bool:
+    """Rebuild ChromaDB from PostgreSQL chunks when the vector store is empty.
+
+    This handles the case where a new Railway volume is attached or
+    the container storage was reset. Since text chunks are safely stored
+    in PostgreSQL, we re-embed them into ChromaDB.
+    """
+    from backend.vector_store import _ensure_initialized, collection, add_chunks_to_store
+
+    _ensure_initialized()
+    if not collection:
+        return False
+
+    if collection.count() > 0:
+        logger.info(f"ChromaDB has {collection.count()} chunks — no rebuild needed")
+        return False
+
+    ready_docs = await get_all_ready_documents()
+    if not ready_docs:
+        logger.info("No ready documents in PostgreSQL — nothing to rebuild")
+        return False
+
+    logger.info(f"ChromaDB is empty but {len(ready_docs)} ready docs exist — rebuilding...")
+
+    pool = await _get_pool()
+    total_rebuilt = 0
+
+    for doc in ready_docs:
+        doc_id = doc["id"]
+        user_id = doc.get("user_id") or 1
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT chunk_index, content, article, section_title, pages "
+                    "FROM document_chunks WHERE document_id = $1 ORDER BY chunk_index",
+                    doc_id,
+                )
+
+            if not rows:
+                continue
+
+            chunks = []
+            for r in rows:
+                chunks.append({
+                    "text": r["content"],
+                    "article": r["article"] or "",
+                    "pages": [int(p) for p in (r["pages"] or "").split(",") if p.strip().isdigit()],
+                })
+
+            doc_metadata = {
+                "title": doc.get("title") or doc.get("original_filename", ""),
+                "law_number": doc.get("law_number", ""),
+                "law_date": doc.get("law_date", ""),
+                "original_filename": doc.get("original_filename", ""),
+            }
+
+            await add_chunks_to_store(doc_id, user_id, chunks, doc_metadata)
+            total_rebuilt += len(chunks)
+            logger.info(f"  Rebuilt doc {doc_id}: {len(chunks)} chunks embedded")
+
+        except Exception as e:
+            logger.error(f"  Failed to rebuild doc {doc_id}: {e}")
+            continue
+
+    logger.info(f"ChromaDB rebuild complete: {total_rebuilt} chunks across {len(ready_docs)} documents")
+    return total_rebuilt > 0
 
 
 limiter = Limiter(key_func=get_remote_address)
