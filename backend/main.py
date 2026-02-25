@@ -29,6 +29,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+import httpx
 from backend.config import settings
 from backend.database import (
     init_db, create_document, get_all_documents, get_document,
@@ -595,6 +596,20 @@ async def billing_create_checkout(user: dict = Depends(get_current_user)):
     try:
         url = await create_order(user["id"], user["email"])
         return {"url": url}
+    except httpx.HTTPStatusError as e:
+        logger.error(f"PayPal order creation failed: {e.response.status_code} {e.response.text}")
+        body = {}
+        try:
+            body = e.response.json()
+        except Exception:
+            pass
+        details = body.get("details", [])
+        if any(d.get("issue") == "PAYEE_ACCOUNT_RESTRICTED" for d in details):
+            raise HTTPException(
+                status_code=503,
+                detail="Llogaria e pagesave eshte e kufizuar perkohesisht. Provoni me vone.",
+            )
+        raise HTTPException(status_code=500, detail="Gabim gjatë krijimit të sesionit. Provoni përsëri.")
     except Exception as e:
         logger.error(f"PayPal order creation failed: {e}")
         raise HTTPException(status_code=500, detail="Gabim gjatë krijimit të sesionit. Provoni përsëri.")
