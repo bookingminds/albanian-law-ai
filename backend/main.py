@@ -169,6 +169,29 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
 
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if not request.url.path.startswith("/api"):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self' https://api-m.paypal.com https://api-m.sandbox.paypal.com; "
+            "frame-src 'none'; "
+            "object-src 'none'; "
+            "base-uri 'self'"
+        )
+    return response
+
+
 frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
 
 MAX_DOCS_PER_USER = 20
@@ -586,7 +609,8 @@ async def restore_purchase(user: dict = Depends(get_current_user)):
 # ── PayPal Billing API (one-time payments) ────────────────────
 
 @app.post("/api/billing/create-checkout")
-async def billing_create_checkout(user: dict = Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def billing_create_checkout(request: Request, user: dict = Depends(get_current_user)):
     """Create a PayPal order and return the approval URL."""
     if not paypal_configured():
         raise HTTPException(
@@ -677,8 +701,6 @@ async def billing_config():
     return {
         "payments_configured": paypal_configured(),
         "price_eur": settings.SUBSCRIPTION_PRICE_EUR,
-        "sandbox": settings.PAYPAL_SANDBOX,
-        "paypal_client_id": settings.PAYPAL_CLIENT_ID if paypal_configured() else "",
     }
 
 

@@ -341,7 +341,9 @@
             btn.textContent = 'Duke u drejtuar te PayPal...';
             try {
                 var token = typeof getToken === 'function' ? getToken() : null;
+                if (!token) { window.location.href = '/login?redirect=/app'; return; }
                 var cfgRes = await fetch('/api/billing/config');
+                if (!cfgRes.ok) throw new Error('Nuk mund të kontrollojmë statusin e pagesave.');
                 var cfg = await cfgRes.json();
                 if (!cfg.payments_configured) {
                     throw new Error('Pagesat do të aktivizohen së shpejti. Provoni përsëri më vonë.');
@@ -351,14 +353,15 @@
                     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
                 });
                 var data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Gabim');
-                if (data.url) {
+                if (!res.ok) throw new Error(data.detail || 'Gabim gjatë krijimit të sesionit.');
+                if (data.url && data.url.indexOf('https://') === 0) {
                     window.location.href = data.url;
                 } else {
-                    throw new Error('No checkout URL returned');
+                    throw new Error('Gabim gjatë lidhjes me PayPal. Provoni përsëri.');
                 }
             } catch (err) {
                 if (typeof showToast === 'function') showToast(err.message, 'error');
+                else alert(err.message);
                 btn.disabled = false;
                 btn.textContent = origText;
             }

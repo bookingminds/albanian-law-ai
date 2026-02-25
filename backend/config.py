@@ -71,7 +71,6 @@ class Settings(BaseSettings):
     # PayPal (web payments)
     PAYPAL_CLIENT_ID: str = os.environ.get("PAYPAL_CLIENT_ID", "")
     PAYPAL_CLIENT_SECRET: str = os.environ.get("PAYPAL_CLIENT_SECRET", "")
-    PAYPAL_PLAN_ID: str = os.environ.get("PAYPAL_PLAN_ID", "")
     PAYPAL_WEBHOOK_ID: str = os.environ.get("PAYPAL_WEBHOOK_ID", "")
     PAYPAL_SANDBOX: bool = os.environ.get("PAYPAL_SANDBOX", "true").lower() in ("true", "1", "yes")
 
