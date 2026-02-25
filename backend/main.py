@@ -84,6 +84,11 @@ from backend.trial_abuse import is_disposable_email, get_client_ip
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database and run migrations on startup."""
+    _rd = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+    if _rd and settings.SERVER_URL in ("http://localhost:8000", ""):
+        settings.SERVER_URL = f"https://{_rd}"
+        settings.FRONTEND_URL = f"https://{_rd}"
+        logger.info(f"Auto-detected SERVER_URL from Railway: {settings.SERVER_URL}")
     try:
         await init_db()
         logger.info("Database initialized successfully")
@@ -141,15 +146,20 @@ async def global_exception_handler(request: Request, exc: Exception):
     raise exc
 
 
-_cors_origins = [o for o in {
-    settings.FRONTEND_URL,
-    settings.SERVER_URL,
-    "http://localhost:8000",
-    "http://localhost:3000",
-} if o]
-if settings.SERVER_URL and settings.SERVER_URL != "http://localhost:8000":
-    _cors_origins = [o for o in _cors_origins
-                     if "localhost" not in o]
+_cors_origins_set: set[str] = set()
+for _u in (settings.FRONTEND_URL, settings.SERVER_URL):
+    if _u and _u != "http://localhost:8000":
+        _cors_origins_set.add(_u.rstrip("/"))
+if settings.CUSTOM_DOMAIN:
+    _cors_origins_set.add(f"https://{settings.CUSTOM_DOMAIN}")
+    _cors_origins_set.add(f"https://www.{settings.CUSTOM_DOMAIN}")
+_railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+if _railway_domain:
+    _cors_origins_set.add(f"https://{_railway_domain}")
+if not _cors_origins_set:
+    _cors_origins_set = {"http://localhost:8000", "http://localhost:3000"}
+_cors_origins = list(_cors_origins_set)
+logger.info(f"CORS origins: {_cors_origins}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -415,20 +425,21 @@ async def auth_me(user: dict = Depends(get_current_user)):
         except Exception:
             pass
     is_premium = bool(user.get("is_premium"))
+    is_admin = bool(user.get("is_admin"))
     billing_status = user.get("subscription_status") or ""
-    has_active_billing = is_premium and billing_status in ("active", "trialing")
+    has_active_billing = is_admin or (is_premium and billing_status in ("active", "trialing"))
 
     return {
         "user": {
             "id": user["id"],
             "email": user["email"],
-            "is_admin": bool(user.get("is_admin")),
+            "is_admin": is_admin,
         },
         "subscription": sub,
         "subscription_price_eur": SUBSCRIPTION_PRICE_EUR,
         "billing": {
-            "is_premium": is_premium,
-            "subscription_status": billing_status,
+            "is_premium": is_premium or is_admin,
+            "subscription_status": billing_status if not is_admin else "admin",
             "active": has_active_billing,
         },
         "trial": {

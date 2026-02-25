@@ -266,7 +266,7 @@
                 var trialDays = data.trial && data.trial.trial_days_left;
                 var trialHours = data.trial && data.trial.trial_hours_left;
 
-                if (hasSubscription || hasBilling) {
+                if (data.user.is_admin || hasSubscription || hasBilling) {
                     document.getElementById('sidebarUpgrade').style.display = 'none';
                     document.getElementById('trialBanner').style.display = 'none';
                     document.getElementById('paywallOverlay').style.display = 'none';
@@ -332,6 +332,11 @@
             btn.textContent = 'Duke u drejtuar...';
             try {
                 var token = typeof getToken === 'function' ? getToken() : null;
+                var cfgRes = await fetch('/api/billing/config');
+                var cfg = await cfgRes.json();
+                if (!cfg.payments_configured) {
+                    throw new Error('Pagesat do të aktivizohen së shpejti. Provoni përsëri më vonë.');
+                }
                 var res = await fetch('/api/billing/create-checkout', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },

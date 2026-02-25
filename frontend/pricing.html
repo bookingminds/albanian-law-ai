@@ -201,6 +201,11 @@
             btn.disabled = true;
             btn.textContent = 'Duke u drejtuar te 2Checkout...';
             try {
+                var cfgRes = await fetch('/api/billing/config');
+                var cfg = await cfgRes.json();
+                if (!cfg.payments_configured) {
+                    throw new Error('Pagesat do të aktivizohen së shpejti. Provoni përsëri më vonë.');
+                }
                 var res = await fetch('/api/billing/create-checkout', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },

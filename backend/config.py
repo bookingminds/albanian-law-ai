@@ -75,8 +75,9 @@ class Settings(BaseSettings):
     TWOCO_IPN_SECRET: str = ""
     TWOCO_SANDBOX: bool = True
 
-    SERVER_URL: str = "http://localhost:8000"
-    FRONTEND_URL: str = "http://localhost:8000"
+    SERVER_URL: str = os.environ.get("SERVER_URL", os.environ.get("RAILWAY_PUBLIC_DOMAIN", "http://localhost:8000"))
+    FRONTEND_URL: str = os.environ.get("FRONTEND_URL", os.environ.get("RAILWAY_PUBLIC_DOMAIN", "http://localhost:8000"))
+    CUSTOM_DOMAIN: str = ""
 
     # Database
     DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
