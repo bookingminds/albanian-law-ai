@@ -220,6 +220,15 @@
         }
 
         (async function initApp() {
+            var urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('subscription') === 'success') {
+                if (typeof showToast === 'function') showToast('Pagesa u krye me sukses! Mirë se vini në Premium.', 'success');
+                window.history.replaceState({}, '', '/app');
+            } else if (urlParams.get('subscription') === 'failed') {
+                if (typeof showToast === 'function') showToast('Pagesa nuk u krye. Provoni përsëri.', 'error');
+                window.history.replaceState({}, '', '/app');
+            }
+
             var token = typeof getToken === 'function' ? getToken() : null;
 
             if (!token) {

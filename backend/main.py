@@ -60,7 +60,7 @@ from backend.file_storage import (
     check_storage_health, list_bucket_files,
 )
 from backend.billing import (
-    create_subscription, verify_webhook_signature,
+    create_order, capture_order, verify_webhook_signature,
     process_webhook_event, get_billing_status, paypal_configured,
 )
 from backend.database import (
@@ -582,30 +582,51 @@ async def restore_purchase(user: dict = Depends(get_current_user)):
     return {"restored": False, "message": "Nuk u gjet asnjë abonim aktiv."}
 
 
-# ── PayPal Billing API (web payments) ─────────────────────────
+# ── PayPal Billing API (one-time payments) ────────────────────
 
 @app.post("/api/billing/create-checkout")
 async def billing_create_checkout(user: dict = Depends(get_current_user)):
-    """Create a PayPal subscription and return the approval URL."""
+    """Create a PayPal order and return the approval URL."""
     if not paypal_configured():
         raise HTTPException(
             status_code=501,
             detail="Pagesat nuk janë konfiguruar ende.",
         )
     try:
-        url = await create_subscription(user["id"], user["email"])
+        url = await create_order(user["id"], user["email"])
         return {"url": url}
     except Exception as e:
-        logger.error(f"PayPal subscription creation failed: {e}")
+        logger.error(f"PayPal order creation failed: {e}")
         raise HTTPException(status_code=500, detail="Gabim gjatë krijimit të sesionit. Provoni përsëri.")
+
+
+@app.get("/api/billing/capture")
+async def billing_capture(token: str = "", PayerID: str = ""):
+    """PayPal redirects here after user approves the payment.
+
+    Captures the order and activates premium, then redirects to /app.
+    """
+    if not token:
+        return FileResponse(str(frontend_dir / "index.html"))
+    try:
+        result = await capture_order(token)
+        if result.get("captured") or result.get("already_captured"):
+            logger.info(f"Payment captured successfully: {result}")
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/app?subscription=success", status_code=302)
+        else:
+            logger.warning(f"Payment capture incomplete: {result}")
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/app?subscription=failed", status_code=302)
+    except Exception as e:
+        logger.error(f"Payment capture error: {e}")
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/app?subscription=failed", status_code=302)
 
 
 @app.post("/api/paypal/webhook")
 async def paypal_webhook(request: Request):
-    """PayPal webhook endpoint — JSON POST, signature verified via API.
-
-    No auth required: called server-to-server by PayPal.
-    """
+    """PayPal webhook endpoint — JSON POST, signature verified via API."""
     raw_body = await request.body()
     headers = dict(request.headers)
 
