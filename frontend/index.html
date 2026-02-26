@@ -317,8 +317,13 @@
                     document.getElementById('paywallOverlayMessage').textContent = t('paywall.activate_to_continue') || 'Aktivizo abonimin për të vazhduar me Albanian Law AI.';
                 }
             } catch (e) {
-                if (typeof clearToken === 'function') clearToken();
-                window.location.reload();
+                console.warn('Auth check failed:', e.message);
+                document.getElementById('sidebarLogin').style.display = 'block';
+                document.getElementById('sidebarSignup').style.display = 'block';
+                document.getElementById('sidebarUser').style.display = 'none';
+                document.getElementById('trialBanner').style.display = 'none';
+                document.getElementById('paywallOverlay').style.display = 'none';
+                window._canSend = false;
             }
         })();
 
