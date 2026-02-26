@@ -75,7 +75,7 @@ class Settings(BaseSettings):
 
     SERVER_URL: str = os.environ.get("SERVER_URL", os.environ.get("RAILWAY_PUBLIC_DOMAIN", "http://localhost:8000"))
     FRONTEND_URL: str = os.environ.get("FRONTEND_URL", os.environ.get("RAILWAY_PUBLIC_DOMAIN", "http://localhost:8000"))
-    CUSTOM_DOMAIN: str = ""
+    CUSTOM_DOMAIN: str = os.environ.get("CUSTOM_DOMAIN", "")
 
     # Database
     DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
