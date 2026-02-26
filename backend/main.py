@@ -252,13 +252,14 @@ async def security_headers(request: Request, call_next):
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     if not request.url.path.startswith("/api"):
+        sb_connect = f" {settings.SUPABASE_URL}" if settings.SUPABASE_URL else ""
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com; "
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
             "img-src 'self' data: https:; "
-            "connect-src 'self'; "
+            f"connect-src 'self'{sb_connect}; "
             "frame-src 'none'; "
             "object-src 'none'; "
             "base-uri 'self'"
@@ -360,26 +361,29 @@ async def register(data: RegisterRequest, request: Request):
             sb_data = await supabase_sign_up(email, data.password)
             sb_user = sb_data.get("user") or {}
             sb_uid = sb_user.get("id", "")
-            access_token = (sb_data.get("session") or {}).get("access_token", "")
 
             user_id = await create_user_from_supabase(
                 email, supabase_uid=sb_uid, is_admin=is_admin,
                 trial_ends_at=trial_ends_at, signup_ip=client_ip or "",
             )
-            token = access_token or create_access_token(user_id, email, is_admin)
+            return {
+                "success": True,
+                "user": {"id": user_id, "email": email, "is_admin": is_admin},
+                "trial_ends_at": trial_ends_at,
+                "trial_days": settings.TRIAL_DAYS,
+            }
         else:
             user_id = await create_user(
                 email, hash_password(data.password), is_admin=is_admin,
                 trial_ends_at=trial_ends_at, signup_ip=client_ip or "",
             )
             token = create_access_token(user_id, email, is_admin)
-
-        return {
-            "token": token,
-            "user": {"id": user_id, "email": email, "is_admin": is_admin},
-            "trial_ends_at": trial_ends_at,
-            "trial_days": settings.TRIAL_DAYS,
-        }
+            return {
+                "token": token,
+                "user": {"id": user_id, "email": email, "is_admin": is_admin},
+                "trial_ends_at": trial_ends_at,
+                "trial_days": settings.TRIAL_DAYS,
+            }
     except HTTPException:
         raise
     except Exception as e:
@@ -419,8 +423,9 @@ async def login(data: LoginRequest, request: Request):
                         )
                         user = await get_user_by_id(user_id)
 
+                token = create_access_token(user["id"], user["email"], bool(user.get("is_admin")))
                 return {
-                    "token": access_token,
+                    "token": token,
                     "user": {
                         "id": user["id"],
                         "email": user["email"],
@@ -488,6 +493,16 @@ async def logout(request: Request, user: dict = Depends(get_current_user)):
     if _supabase_configured and token:
         await supabase_sign_out(token)
     return {"message": "U dol me sukses."}
+
+
+@app.get("/api/auth/config")
+async def auth_config():
+    """Public: return Supabase config for frontend SDK initialization."""
+    return {
+        "supabase_url": settings.SUPABASE_URL if _supabase_configured else "",
+        "supabase_anon_key": settings.SUPABASE_ANON_KEY if _supabase_configured else "",
+        "supabase_configured": _supabase_configured,
+    }
 
 
 @app.get("/api/auth/me")

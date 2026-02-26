@@ -161,7 +161,7 @@ def decode_token(token: str) -> dict | None:
 # ── Dependency: get current user ──────────────────────────────
 
 async def _resolve_user_from_token(token: str) -> dict | None:
-    """Try Supabase first, then local JWT."""
+    """Try Supabase first (tokens are auto-refreshed by SDK), local JWT as fallback."""
     if _supabase_configured:
         sb_user = await supabase_get_user(token)
         if sb_user:
@@ -190,6 +190,7 @@ async def _resolve_user_from_token(token: str) -> dict | None:
     if payload and "sub" in payload:
         user_id = int(payload["sub"])
         return await get_user_by_id(user_id)
+
     return None
 
 

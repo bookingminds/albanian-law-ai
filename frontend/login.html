@@ -77,6 +77,7 @@
 
     <div class="login-toast-container" id="toastContainer"></div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <script src="/static/js/auth.js"></script>
     <script>
         document.querySelectorAll('.auth-tab').forEach(function(btn) {
@@ -89,20 +90,27 @@
             });
         });
 
+        (async function() { await initSupabaseAuth(); })();
+
         async function handleLogin(e) {
             e.preventDefault();
             var email = document.getElementById('loginEmail').value.trim();
             var password = document.getElementById('loginPassword').value;
             try {
-                var res = await fetch('/api/auth/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email: email, password: password }),
-                });
-                var data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Hyrja dështoi');
-                setToken(data.token);
-                window.location.href = '/app';
+                if (isSupabaseConfigured()) {
+                    await supabaseSignIn(email, password);
+                } else {
+                    var res = await fetch('/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: email, password: password }),
+                    });
+                    var data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || 'Hyrja dështoi');
+                    setToken(data.token);
+                }
+                var redirect = new URLSearchParams(window.location.search).get('redirect') || '/app';
+                window.location.href = redirect;
             } catch (err) {
                 showToast(err.message, 'error');
             }
@@ -114,15 +122,9 @@
             var email = document.getElementById('registerEmail').value.trim();
             var password = document.getElementById('registerPassword').value;
             try {
-                var res = await fetch('/api/auth/register', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email: email, password: password }),
-                });
-                var data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Regjistrimi dështoi');
-                setToken(data.token);
-                window.location.href = '/app';
+                await supabaseSignUp(email, password);
+                var redirect = new URLSearchParams(window.location.search).get('redirect') || '/app';
+                window.location.href = redirect;
             } catch (err) {
                 showToast(err.message, 'error');
             }

@@ -4,7 +4,15 @@
  */
 
 const API = '';
-let sessionId = generateSessionId();
+const CHAT_STORAGE_KEY = 'albanian_law_ai_chat';
+const CHAT_DRAFT_KEY = 'albanian_law_ai_draft';
+const CONVOS_INDEX_KEY = 'albanian_law_ai_convos';
+const CONVO_PREFIX = 'albanian_law_ai_conv_';
+const CHAT_MAX_MESSAGES = 100;
+const CHAT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const CONVOS_MAX = 30;
+let sessionId = _tryRestoreSessionId();
+let chatHistory = [];
 
 async function viewSourcePdf(docId, page) {
     try {
@@ -47,18 +55,346 @@ function generateSessionId() {
 }
 
 function newSession() {
+    _archiveCurrentConvo();
     sessionId = generateSessionId();
-    const messages = document.getElementById('chatMessages');
-    const t = typeof __t !== 'undefined' ? __t : (k) => k;
-    messages.innerHTML = `
-        <div class="message message-assistant">
-            <div class="message-bubble">
-                <p><strong>${t('chat.welcome_title')}</strong></p>
-                <p>${t('chat.welcome_body')}</p>
-                <p style="color:var(--text-muted); font-size:.85rem; margin-top:.5rem;">${t('chat.welcome_note')}</p>
-            </div>
-        </div>
-    `;
+    chatHistory = [];
+    localStorage.removeItem(CHAT_STORAGE_KEY);
+    localStorage.removeItem(CHAT_DRAFT_KEY);
+    _renderWelcome();
+    renderConvoSidebar();
+}
+
+function _renderWelcome() {
+    var container = document.getElementById('chatMessages');
+    var t = typeof __t !== 'undefined' ? __t : function(k) { return k; };
+    container.innerHTML =
+        '<div class="message message-assistant"><div class="message-bubble">' +
+        '<p><strong>' + t('chat.welcome_title') + '</strong></p>' +
+        '<p>' + t('chat.welcome_body') + '</p>' +
+        '<p style="color:var(--text-muted); font-size:.85rem; margin-top:.5rem;">' + t('chat.welcome_note') + '</p>' +
+        '</div></div>';
+}
+
+// ── Chat Persistence (active conversation) ───────────────
+
+function _tryRestoreSessionId() {
+    try {
+        var raw = localStorage.getItem(CHAT_STORAGE_KEY);
+        if (raw) {
+            var state = JSON.parse(raw);
+            if (state && state.sessionId) return state.sessionId;
+        }
+    } catch (_) {}
+    return generateSessionId();
+}
+
+function _saveChatState() {
+    try {
+        var msgs = chatHistory.slice(-CHAT_MAX_MESSAGES);
+        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify({
+            sessionId: sessionId,
+            messages: msgs,
+            ts: Date.now(),
+        }));
+    } catch (e) {
+        if (chatHistory.length > 20) {
+            chatHistory = chatHistory.slice(-20);
+            try {
+                localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify({
+                    sessionId: sessionId,
+                    messages: chatHistory,
+                    ts: Date.now(),
+                }));
+            } catch (_) {}
+        }
+    }
+    _updateConvoIndex();
+    renderConvoSidebar();
+}
+
+function _loadChatState() {
+    try {
+        var raw = localStorage.getItem(CHAT_STORAGE_KEY);
+        if (!raw) return null;
+        var state = JSON.parse(raw);
+        if (!state || !Array.isArray(state.messages) || !state.messages.length) return null;
+        if (state.ts && (Date.now() - state.ts) > CHAT_MAX_AGE_MS) {
+            localStorage.removeItem(CHAT_STORAGE_KEY);
+            return null;
+        }
+        state.messages = _validateMessages(state.messages);
+        if (!state.messages.length) return null;
+        return state;
+    } catch (e) {
+        localStorage.removeItem(CHAT_STORAGE_KEY);
+        return null;
+    }
+}
+
+function _validateMessages(msgs) {
+    return (msgs || []).filter(function(m) {
+        return m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.length > 0;
+    });
+}
+
+function clearChatStorage() {
+    chatHistory = [];
+    localStorage.removeItem(CHAT_STORAGE_KEY);
+    localStorage.removeItem(CHAT_DRAFT_KEY);
+}
+
+function clearAllConversations() {
+    chatHistory = [];
+    sessionId = generateSessionId();
+    localStorage.removeItem(CHAT_STORAGE_KEY);
+    localStorage.removeItem(CHAT_DRAFT_KEY);
+    var index = _loadConvoIndex();
+    for (var i = 0; i < index.length; i++) {
+        localStorage.removeItem(CONVO_PREFIX + index[i].id);
+    }
+    localStorage.removeItem(CONVOS_INDEX_KEY);
+}
+
+function saveDraft() {
+    try {
+        var input = document.getElementById('chatInput');
+        if (!input) return;
+        var text = input.value || '';
+        if (text.trim()) {
+            localStorage.setItem(CHAT_DRAFT_KEY, text);
+        } else {
+            localStorage.removeItem(CHAT_DRAFT_KEY);
+        }
+    } catch (_) {}
+}
+
+function restoreDraft() {
+    try {
+        var text = localStorage.getItem(CHAT_DRAFT_KEY);
+        if (!text) return;
+        var input = document.getElementById('chatInput');
+        if (!input) return;
+        input.value = text;
+        autoResize(input);
+    } catch (_) {}
+}
+
+function restoreChatHistory() {
+    var state = _loadChatState();
+    if (!state) {
+        renderConvoSidebar();
+        return false;
+    }
+
+    sessionId = state.sessionId || generateSessionId();
+    chatHistory = state.messages;
+
+    _renderMessages(chatHistory);
+    restoreDraft();
+
+    if (chatHistory.length > 0) {
+        _updateConvoIndex();
+    }
+    renderConvoSidebar();
+
+    if (chatHistory.length > 0) {
+        requestAnimationFrame(function() { scrollToBottom(); });
+    }
+    return true;
+}
+
+function _renderMessages(msgs) {
+    var container = document.getElementById('chatMessages');
+    container.innerHTML = '';
+    for (var i = 0; i < msgs.length; i++) {
+        var msg = msgs[i];
+        var msgDiv = document.createElement('div');
+        msgDiv.className = 'message message-' + msg.role;
+        var bubbleContent = '';
+        if (msg.role === 'assistant') {
+            bubbleContent = formatAnswer(msg.content);
+        } else {
+            bubbleContent = '<p>' + escapeHtml(msg.content) + '</p>';
+        }
+        msgDiv.innerHTML = '<div class="message-bubble">' + bubbleContent + '</div>';
+        container.appendChild(msgDiv);
+    }
+}
+
+// ── Conversation Index (sidebar history) ─────────────────
+
+function _loadConvoIndex() {
+    try {
+        var raw = localStorage.getItem(CONVOS_INDEX_KEY);
+        if (!raw) return [];
+        var arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return [];
+        return arr.filter(function(c) {
+            return c && c.id && c.title;
+        });
+    } catch (_) {
+        return [];
+    }
+}
+
+function _saveConvoIndex(index) {
+    try {
+        localStorage.setItem(CONVOS_INDEX_KEY, JSON.stringify(index.slice(0, CONVOS_MAX)));
+    } catch (_) {}
+}
+
+function _convoTitle(msgs) {
+    for (var i = 0; i < msgs.length; i++) {
+        if (msgs[i].role === 'user') {
+            var t = msgs[i].content.trim();
+            return t.length > 45 ? t.substring(0, 42) + '...' : t;
+        }
+    }
+    return 'Bisedë';
+}
+
+function _convoPreview(msgs) {
+    for (var i = 0; i < msgs.length; i++) {
+        if (msgs[i].role === 'assistant') {
+            var t = msgs[i].content.replace(/\*\*/g, '').trim();
+            return t.length > 80 ? t.substring(0, 77) + '...' : t;
+        }
+    }
+    return '';
+}
+
+function _updateConvoIndex() {
+    if (!chatHistory.length) return;
+    var index = _loadConvoIndex();
+    var existing = -1;
+    for (var i = 0; i < index.length; i++) {
+        if (index[i].id === sessionId) { existing = i; break; }
+    }
+    var entry = {
+        id: sessionId,
+        title: _convoTitle(chatHistory),
+        preview: _convoPreview(chatHistory),
+        messageCount: chatHistory.length,
+        updatedAt: Date.now(),
+    };
+    if (existing >= 0) {
+        entry.createdAt = index[existing].createdAt || entry.updatedAt;
+        index[existing] = entry;
+    } else {
+        entry.createdAt = entry.updatedAt;
+        index.unshift(entry);
+    }
+    index.sort(function(a, b) { return b.updatedAt - a.updatedAt; });
+    if (index.length > CONVOS_MAX) {
+        var removed = index.splice(CONVOS_MAX);
+        for (var j = 0; j < removed.length; j++) {
+            localStorage.removeItem(CONVO_PREFIX + removed[j].id);
+        }
+    }
+    _saveConvoIndex(index);
+}
+
+function _archiveCurrentConvo() {
+    if (!chatHistory.length) return;
+    try {
+        localStorage.setItem(CONVO_PREFIX + sessionId, JSON.stringify({
+            sessionId: sessionId,
+            messages: chatHistory.slice(-CHAT_MAX_MESSAGES),
+            ts: Date.now(),
+        }));
+    } catch (_) {}
+    _updateConvoIndex();
+}
+
+function loadConversation(convoId) {
+    if (convoId === sessionId && chatHistory.length > 0) return;
+    _archiveCurrentConvo();
+    if (typeof closeSidebar === 'function') closeSidebar();
+    try {
+        var raw = localStorage.getItem(CONVO_PREFIX + convoId);
+        if (raw) {
+            var state = JSON.parse(raw);
+            var msgs = _validateMessages(state.messages || []);
+            if (msgs.length) {
+                sessionId = state.sessionId || convoId;
+                chatHistory = msgs;
+                localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify({
+                    sessionId: sessionId,
+                    messages: chatHistory,
+                    ts: Date.now(),
+                }));
+                localStorage.removeItem(CHAT_DRAFT_KEY);
+                _renderMessages(chatHistory);
+                requestAnimationFrame(function() { scrollToBottom(); });
+                renderConvoSidebar();
+                return;
+            }
+        }
+    } catch (_) {}
+    showToast('Biseda nuk u gjet.', 'error');
+}
+
+function deleteConversation(convoId, evt) {
+    if (evt) { evt.stopPropagation(); evt.preventDefault(); }
+    var index = _loadConvoIndex();
+    index = index.filter(function(c) { return c.id !== convoId; });
+    _saveConvoIndex(index);
+    localStorage.removeItem(CONVO_PREFIX + convoId);
+    if (convoId === sessionId) {
+        sessionId = generateSessionId();
+        chatHistory = [];
+        localStorage.removeItem(CHAT_STORAGE_KEY);
+        localStorage.removeItem(CHAT_DRAFT_KEY);
+        _renderWelcome();
+    }
+    renderConvoSidebar();
+}
+
+function _formatConvoDate(ts) {
+    if (!ts) return '';
+    var d = new Date(ts);
+    var now = new Date();
+    var diffMs = now - d;
+    var diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return 'tani';
+    if (diffMin < 60) return diffMin + ' min më parë';
+    var diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return diffH + ' orë më parë';
+    var diffD = Math.floor(diffH / 24);
+    if (diffD === 1) return 'dje';
+    if (diffD < 7) return diffD + ' ditë më parë';
+    var day = d.getDate().toString().padStart(2, '0');
+    var mon = (d.getMonth() + 1).toString().padStart(2, '0');
+    return day + '/' + mon + '/' + d.getFullYear();
+}
+
+function renderConvoSidebar() {
+    var container = document.getElementById('sidebarChats');
+    if (!container) return;
+    var index = _loadConvoIndex();
+    if (!index.length) {
+        container.innerHTML = '';
+        return;
+    }
+
+    var html = '<div class="convo-list-title">Historiku</div>';
+    for (var i = 0; i < index.length; i++) {
+        var c = index[i];
+        var isActive = c.id === sessionId && chatHistory.length > 0;
+        var dateStr = _formatConvoDate(c.updatedAt || c.createdAt);
+        html +=
+            '<div class="convo-item' + (isActive ? ' convo-active' : '') + '" onclick="loadConversation(\'' + c.id + '\')">' +
+                '<div class="convo-item-text">' +
+                    '<div class="convo-item-title">' + escapeHtml(c.title) + '</div>' +
+                    '<div class="convo-item-meta">' +
+                        (dateStr ? '<span class="convo-item-date">' + dateStr + '</span>' : '') +
+                        (c.messageCount ? '<span class="convo-item-count">' + c.messageCount + ' mesazhe</span>' : '') +
+                    '</div>' +
+                '</div>' +
+                '<button class="convo-item-delete" onclick="deleteConversation(\'' + c.id + '\', event)" title="Fshi">&#128465;</button>' +
+            '</div>';
+    }
+    container.innerHTML = html;
 }
 
 // ── Document Management ─────────────────────────────────
@@ -283,6 +619,7 @@ async function sendMessage() {
     addMessage('user', question);
     input.value = '';
     autoResize(input);
+    localStorage.removeItem(CHAT_DRAFT_KEY);
 
     showTypingIndicator();
 
@@ -413,14 +750,15 @@ async function handleStreamResponse(res) {
     // Finalize: replace streaming bubble with proper rendered message
     bubble.innerHTML = formatAnswer(fullText);
 
-    // Sources are already included in the answer text under "**Burimet:**"
-    // so we do NOT render a separate sources card to avoid duplication.
-
     // Add debug info if enabled
     if (debugMode && metrics) {
         const debugHtml = renderDebugInfo(metrics);
         msgDiv.insertAdjacentHTML('beforeend', debugHtml);
     }
+
+    // Persist the complete assistant response
+    chatHistory.push({ role: 'assistant', content: fullText, ts: Date.now() });
+    _saveChatState();
 
     scrollToBottom();
 }
@@ -428,7 +766,9 @@ async function handleStreamResponse(res) {
 
 // ── Message Rendering ────────────────────────────────────
 
-function addMessage(role, content, sources = [], meta = {}) {
+function addMessage(role, content, sources, meta, skipPersist) {
+    sources = sources || [];
+    meta = meta || {};
     const messages = document.getElementById('chatMessages');
 
     const msgDiv = document.createElement('div');
@@ -440,9 +780,6 @@ function addMessage(role, content, sources = [], meta = {}) {
     } else {
         bubbleContent = `<p>${escapeHtml(content)}</p>`;
     }
-
-    // Sources are already part of the answer text under "**Burimet:**"
-    // so no separate sources card is rendered.
 
     let debugHtml = '';
     if (debugMode && meta && (meta.chunks_used || meta.top_similarity || meta.debug)) {
@@ -458,6 +795,11 @@ function addMessage(role, content, sources = [], meta = {}) {
 
     messages.appendChild(msgDiv);
     scrollToBottom();
+
+    if (!skipPersist) {
+        chatHistory.push({ role: role, content: content, ts: Date.now() });
+        _saveChatState();
+    }
 }
 
 function formatAnswer(text) {
@@ -814,9 +1156,14 @@ function _sgGenericFallback(text) {
 
 // ── Main input handler ───────────────────────────────────
 
+var _draftTimer = null;
+
 function onInputChange(textarea) {
     var text = textarea.value.trim();
     _pendingSuggestion = null;
+
+    if (_draftTimer) clearTimeout(_draftTimer);
+    _draftTimer = setTimeout(saveDraft, 500);
 
     if (_sgTimer) clearTimeout(_sgTimer);
     if (_sgAbort) { _sgAbort.abort(); _sgAbort = null; }
@@ -967,6 +1314,11 @@ function hideSuggestPanel() {
 
 // ── Initialize: load documents on page load ──────────────
 document.getElementById('chatInput').focus();
+
+window.addEventListener('beforeunload', function() {
+    saveDraft();
+    _archiveCurrentConvo();
+});
 
 // Load user docs and precomputed topics after a short delay
 setTimeout(function() {

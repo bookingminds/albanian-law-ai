@@ -59,12 +59,14 @@
 
     <div class="toast-container" id="toastContainer"></div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <script src="/static/js/auth.js"></script>
     <script src="/static/js/utils.js"></script>
     <script>
         const API = '';
 
         async function loadDocs() {
+            await initSupabaseAuth();
             const token = getToken();
             if (!token) { window.location.href = '/login'; return; }
 

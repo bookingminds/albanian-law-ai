@@ -191,8 +191,11 @@
         </p>
     </footer>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <script src="/static/js/auth.js"></script>
     <script>
+        initSupabaseAuth();
+
         async function startPremiumCheckout() {
             var token = getToken();
             if (!token) { window.location.href = '/login?redirect=/pricing'; return; }
